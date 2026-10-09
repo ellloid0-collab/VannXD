@@ -81,7 +81,12 @@ jobs:
           if not android.exists():
               print("no android dir")
               sys.exit(0)
-          for path in list(android.rglob("*.gradle")) + list(android.rglob("*.gradle.kts")):
+          paths = []
+          for pat in ("*.gradle", "*.gradle.kts"):
+              for path in android.rglob(pat):
+                  if path.is_file():
+                      paths.append(path)
+          for path in paths:
               text = path.read_text(encoding="utf-8", errors="ignore")
               orig = text
               text = re.sub(r"com\.android\.tools\.build:gradle:[0-9.]+", "com.android.tools.build:gradle:8.11.1", text)
@@ -123,24 +128,18 @@ jobs:
           import re
           from pathlib import Path
           cache = Path.home() / ".pub-cache"
-          files = list(cache.rglob("font_awesome_flutter*/lib/**/*.dart"))
-          if not files:
-              # fallback glob
-              files = [p for p in cache.rglob("*.dart") if "font_awesome_flutter" in str(p)]
+          files = [p for p in cache.rglob("*.dart") if "font_awesome_flutter" in str(p) and p.is_file()]
           print("fa files", len(files))
-          helper = '''import 'package:flutter/widgets.dart';
-          IconData _fa(int c, String fam) => IconData(c, fontFamily: fam, fontPackage: 'font_awesome_flutter');
-          IconData iconDataBrands(int c) => _fa(c, 'FontAwesomeBrands');
-          IconData iconDataSolid(int c) => _fa(c, 'FontAwesomeSolid');
-          IconData iconDataRegular(int c) => _fa(c, 'FontAwesomeRegular');
-          IconData iconDataLight(int c) => _fa(c, 'FontAwesomeLight');
-          IconData iconDataThin(int c) => _fa(c, 'FontAwesomeThin');
-          IconData iconDataDuotone(int c) => _fa(c, 'FontAwesomeDuotone');
-          IconData iconDataSharpSolid(int c) => _fa(c, 'FontAwesomeSharpSolid');
-          IconData iconDataSharpRegular(int c) => _fa(c, 'FontAwesomeSharpRegular');
-          IconData iconDataSharpLight(int c) => _fa(c, 'FontAwesomeSharpLight');
-          IconData iconDataSharpThin(int c) => _fa(c, 'FontAwesomeSharpThin');
-          '''
+          helper = (
+              "import 'package:flutter/widgets.dart';\n"
+              "IconData _fa(int c, String fam) => IconData(c, fontFamily: fam, fontPackage: 'font_awesome_flutter');\n"
+              "IconData iconDataBrands(int c) => _fa(c, 'FontAwesomeBrands');\n"
+              "IconData iconDataSolid(int c) => _fa(c, 'FontAwesomeSolid');\n"
+              "IconData iconDataRegular(int c) => _fa(c, 'FontAwesomeRegular');\n"
+              "IconData iconDataLight(int c) => _fa(c, 'FontAwesomeLight');\n"
+              "IconData iconDataThin(int c) => _fa(c, 'FontAwesomeThin');\n"
+              "IconData iconDataDuotone(int c) => _fa(c, 'FontAwesomeDuotone');\n"
+          )
           for path in files:
               if path.name == "icon_data.dart":
                   path.write_text(helper, encoding="utf-8")
