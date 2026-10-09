@@ -54,8 +54,6 @@ jobs:
           if [ -z "$ROOT" ]; then echo "pubspec.yaml tidak ditemukan"; find project -maxdepth 4 -type f | head -80; exit 1; fi
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
           echo "Found project at $ROOT"
-          echo "==== pubspec environment ===="
-          grep -A5 "^environment:" "$ROOT/pubspec.yaml" || true
 
       - name: Setup Flutter (latest stable)
         uses: subosito/flutter-action@v2
@@ -68,16 +66,34 @@ jobs:
           flutter --version
           dart --version
 
-      - name: Patch Android toolchain to match Flutter
+      - name: Patch pubspec (font_awesome + SDK) + Android toolchain
         run: |
           set -euo pipefail
           ROOT="${{ env.PROJECT_ROOT }}"
-          # Baca rekomendasi kasar: pakai Gradle 8.14.3 + AGP 8.11.1 + Kotlin 2.2.20
-          # (cocok Flutter stable modern / Dart 3.8+)
+          PUB="$ROOT/pubspec.yaml"
+
+          # Longgarkan environment sdk biar resolvable
+          if [ -f "$PUB" ]; then
+            # dependency_overrides untuk font_awesome_flutter (IconData final di Flutter baru)
+            if grep -q "font_awesome_flutter" "$PUB"; then
+              if grep -q "^dependency_overrides:" "$PUB"; then
+                if ! grep -q "font_awesome_flutter:" "$PUB"; then
+                  sed -i '/^dependency_overrides:/a\  font_awesome_flutter: 10.9.0' "$PUB"
+                fi
+              else
+                printf '\ndependency_overrides:\n  font_awesome_flutter: 10.9.0\n' >> "$PUB"
+              fi
+              echo "Override font_awesome_flutter -> 10.9.0"
+            fi
+            echo "==== pubspec (tail) ===="
+            tail -30 "$PUB" || true
+          fi
+
+          # Gradle 9.1.0 + AGP 8.11.1 + Kotlin 2.2.20
           PROP="$ROOT/android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$PROP" ]; then
-            sed -i -E 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip|' "$PROP"
-            echo "Gradle wrapper:"; cat "$PROP"
+            sed -i -E 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-9.1.0-all.zip|' "$PROP"
+            cat "$PROP"
           fi
           while IFS= read -r -d '' f; do
             sed -i -E 's/com\.android\.tools\.build:gradle:[0-9]+\.[0-9]+\.[0-9]+/com.android.tools.build:gradle:8.11.1/g' "$f" || true
@@ -94,9 +110,46 @@ jobs:
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -euo pipefail
-          # Hapus lock lama biar resolve ulang ke SDK runner
           rm -f pubspec.lock
           flutter pub get
+
+      - name: Patch font_awesome IconData if still broken
+        run: |
+          set -euo pipefail
+          # Kalau package masih extends IconData (final), rewrite jadi IconData biasa
+          python3 - <<'PY'
+          import pathlib, re
+          root = pathlib.Path.home() / ".pub-cache"
+          fixed = 0
+          for path in root.rglob("icon_data.dart"):
+              if "font_awesome_flutter" not in str(path):
+                  continue
+              text = path.read_text(encoding="utf-8", errors="ignore")
+              if "extends IconData" not in text:
+                  continue
+              # Ubah: class Foo extends IconData { const Foo(int codePoint) : super(...); }
+              # menjadi fungsi/const IconData helper sedapatnya — pendekatan praktis:
+              # ganti "extends IconData" dan constructor super() → IconData(...)
+              new = text
+              new = new.replace("extends IconData", "")
+              # const Xxx(int codePoint) : super(codePoint, fontFamily: 'Y', fontPackage: 'Z');
+              new = re.sub(
+                  r"const\s+(\w+)\(\s*int\s+codePoint\s*\)\s*:\s*super\(\s*codePoint\s*,",
+                  r"static IconData \1(int codePoint) => IconData(codePoint,",
+                  new,
+              )
+              # variant with super.codePoint
+              new = re.sub(
+                  r"const\s+(\w+)\(\s*super\.codePoint\s*(?:,\s*)?",
+                  r"static IconData \1(int codePoint) => IconData(codePoint, ",
+                  new,
+              )
+              if new != text:
+                  path.write_text(new, encoding="utf-8")
+                  fixed += 1
+                  print("patched", path)
+          print("fixed_files", fixed)
+          PY
 
       - name: Build APK
         working-directory: ${{ env.PROJECT_ROOT }}
