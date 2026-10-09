@@ -71,37 +71,20 @@ jobs:
           set -euo pipefail
           ROOT="${{ env.PROJECT_ROOT }}"
           PUB="$ROOT/pubspec.yaml"
-
-          python3 - <<'PY'
+          if [ -f "$PUB" ] && grep -q "font_awesome_flutter" "$PUB"; then
+            python3 -c "
           from pathlib import Path
           import re
-          pub = Path("${{ env.PROJECT_ROOT }}") / "pubspec.yaml"
-          if not pub.exists():
-              raise SystemExit(0)
-          text = pub.read_text(encoding="utf-8", errors="ignore")
-          # Hapus override font_awesome lama yang bermasalah
-          text = re.sub(r"\ndependency_overrides:\n(?:  .+\n)*", "\n", text)
-          # Pastikan dependency font_awesome_flutter longgar
-          text = re.sub(
-              r"font_awesome_flutter\s*:\s*[^\n]+",
-              "font_awesome_flutter: any",
-              text,
-          )
-          # Override ke git master (perbaikan IconData final)
-          if "font_awesome_flutter" in text and "dependency_overrides:" not in text:
-              text = text.rstrip() + """
-
-dependency_overrides:
-  font_awesome_flutter:
-    git:
-      url: https://github.com/fluttercommunity/font_awesome_flutter.git
-      ref: master
-"""
-          pub.write_text(text + "\n", encoding="utf-8")
-          print("pubspec patched")
-          print(text[-800:])
-          PY
-
+          pub = Path(r'''$PUB''')
+          text = pub.read_text(encoding='utf-8', errors='ignore')
+          text = re.sub(r'\ndependency_overrides:\n(?:  .+\n)*', '\n', text)
+          text = re.sub(r'font_awesome_flutter\s*:\s*[^\n]+', 'font_awesome_flutter: any', text)
+          if 'font_awesome_flutter' in text and 'dependency_overrides:' not in text:
+              text = text.rstrip() + '\n\ndependency_overrides:\n  font_awesome_flutter:\n    git:\n      url: https://github.com/fluttercommunity/font_awesome_flutter.git\n      ref: master\n'
+          pub.write_text(text + '\n', encoding='utf-8')
+          print('pubspec patched')
+          "
+          fi
           PROP="$ROOT/android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$PROP" ]; then
             sed -i -E 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-9.1.0-all.zip|' "$PROP"
@@ -109,12 +92,12 @@ dependency_overrides:
           fi
           while IFS= read -r -d '' f; do
             sed -i -E 's/com\.android\.tools\.build:gradle:[0-9]+\.[0-9]+\.[0-9]+/com.android.tools.build:gradle:8.11.1/g' "$f" || true
-            sed -i -E 's/(id\([\"'\'']com\.android\.application[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"8.11.1"/g' "$f" || true
-            sed -i -E 's/(id\([\"'\'']com\.android\.library[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"8.11.1"/g' "$f" || true
-            sed -i -E 's/(id\([\"'\'']org\.jetbrains\.kotlin\.android[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"2.2.20"/g' "$f" || true
+            sed -i -E 's/(id\(["'\'']com\.android\.application["'\\'']\) version )["'\\''][0-9.]+["'\\'']/\1"8.11.1"/g' "$f" || true
+            sed -i -E 's/(id\(["'\\'']com\.android\.library["'\\'']\) version )["'\\''][0-9.]+["'\\'']/\1"8.11.1"/g' "$f" || true
+            sed -i -E 's/(id\(["'\\'']org\.jetbrains\.kotlin\.android["'\\'']\) version )["'\\''][0-9.]+["'\\'']/\1"2.2.20"/g' "$f" || true
             sed -i -E 's/org\.jetbrains\.kotlin:kotlin-gradle-plugin:[0-9.]+/org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.20/g' "$f" || true
-            sed -i -E 's/ext\.kotlin_version[[:space:]]*=[[:space:]]*["'\''][0-9.]+["'\'']/ext.kotlin_version = "2.2.20"/g' "$f" || true
-            sed -i -E 's/kotlin_version[[:space:]]*=[[:space:]]*["'\''][0-9.]+["'\'']/kotlin_version = "2.2.20"/g' "$f" || true
+            sed -i -E 's/ext\.kotlin_version[[:space:]]*=[[:space:]]*["'\\''][0-9.]+["'\\'']/ext.kotlin_version = "2.2.20"/g' "$f" || true
+            sed -i -E 's/kotlin_version[[:space:]]*=[[:space:]]*["'\\''][0-9.]+["'\\'']/kotlin_version = "2.2.20"/g' "$f" || true
           done < <(find "$ROOT/android" -type f \( -name "*.gradle" -o -name "*.gradle.kts" \) -print0 2>/dev/null)
           echo "Android patch done"
 
