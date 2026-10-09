@@ -20,7 +20,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
     permissions:
       contents: read
     steps:
@@ -35,8 +35,6 @@ jobs:
           set -euo pipefail
           echo "ZIP_URL=$ZIP_URL"
           rm -f project.zip
-
-          # Jangan kirim Accept octet-stream kecuali api.github.com
           if echo "$ZIP_URL" | grep -q "api.github.com"; then
             curl -fsSL -L -o project.zip \
               -H "Authorization: Bearer ${GH_TOKEN}" \
@@ -44,36 +42,39 @@ jobs:
               -H "X-GitHub-Api-Version: 2022-11-28" \
               "$ZIP_URL"
           else
-            curl -fsSL -L -o project.zip \
-              -H "User-Agent: VannXD-Build/1.0" \
-              "$ZIP_URL"
+            curl -fsSL -L -o project.zip -H "User-Agent: VannXD-Build/1.0" "$ZIP_URL"
           fi
-
           SIZE=$(wc -c < project.zip)
           echo "Downloaded size=$SIZE"
-          if [ "$SIZE" -lt 1000 ]; then
-            echo "File terlalu kecil — kemungkinan HTML/error page"
-            head -c 400 project.zip || true
-            exit 1
-          fi
-          # ZIP magic PK
-          if ! head -c 2 project.zip | grep -q "PK"; then
-            echo "Bukan file ZIP valid (magic header salah)"
-            file project.zip || true
-            head -c 200 project.zip || true
-            exit 1
-          fi
-
+          if [ "$SIZE" -lt 1000 ]; then echo "File terlalu kecil"; head -c 400 project.zip; exit 1; fi
+          if ! head -c 2 project.zip | grep -q "PK"; then echo "Bukan ZIP"; file project.zip; exit 1; fi
           mkdir -p project
           unzip -q project.zip -d project
           ROOT=$(find project -name "pubspec.yaml" | head -n 1 | xargs -r dirname)
-          if [ -z "$ROOT" ]; then
-            echo "pubspec.yaml tidak ditemukan di ZIP"
-            find project -maxdepth 4 -type f | head -80
-            exit 1
-          fi
+          if [ -z "$ROOT" ]; then echo "pubspec.yaml tidak ditemukan"; find project -maxdepth 4 -type f | head -80; exit 1; fi
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
           echo "Found project at $ROOT"
+
+      - name: Patch Gradle for modern Flutter
+        run: |
+          set -euo pipefail
+          ROOT="${{ env.PROJECT_ROOT }}"
+          PROP="$ROOT/android/gradle/wrapper/gradle-wrapper.properties"
+          if [ -f "$PROP" ]; then
+            echo "Before:"; cat "$PROP" || true
+            sed -i -E 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip|' "$PROP"
+            echo "After:"; cat "$PROP" || true
+          else
+            echo "gradle-wrapper.properties tidak ada — skip"
+          fi
+          # Bump Android Gradle Plugin bila terlalu lama
+          while IFS= read -r -d '' f; do
+            sed -i -E 's/com\.android\.tools\.build:gradle:[0-9]+\.[0-9]+\.[0-9]+/com.android.tools.build:gradle:8.9.1/g' "$f" || true
+            sed -i -E 's/id\(["'\'']com\.android\.application["'\'']\) version ["'\''][0-9.]+["'\'']/id("com.android.application") version "8.9.1"/g' "$f" || true
+            sed -i -E 's/id\(["'\'']com\.android\.library["'\'']\) version ["'\''][0-9.]+["'\'']/id("com.android.library") version "8.9.1"/g' "$f" || true
+            sed -i -E 's/id\(["'\'']org\.jetbrains\.kotlin\.android["'\'']\) version ["'\''][0-9.]+["'\'']/id("org.jetbrains.kotlin.android") version "2.1.0"/g' "$f" || true
+          done < <(find "$ROOT/android" -type f \( -name "*.gradle" -o -name "*.gradle.kts" \) -print0 2>/dev/null)
+          echo "Gradle patch done"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -88,6 +89,7 @@ jobs:
       - name: Build APK
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
+          set -euo pipefail
           if [ "${{ inputs.build_type }}" = "debug" ]; then
             flutter build apk --debug
           else
