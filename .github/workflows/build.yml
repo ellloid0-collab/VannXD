@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       zip_url:
-        description: URL ZIP project Flutter
+        description: URL ZIP project Flutter (direct file URL)
         required: true
         type: string
       tag:
@@ -36,54 +36,39 @@ jobs:
           echo "ZIP_URL=$ZIP_URL"
           rm -f project.zip
 
-          download_ok=0
+          # Jangan kirim Accept octet-stream kecuali api.github.com
           if echo "$ZIP_URL" | grep -q "api.github.com"; then
-            echo "Mode: GitHub API asset"
-            CODE=$(curl -sS -L -o project.zip -w "%{http_code}" \
+            curl -fsSL -L -o project.zip \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "Accept: application/octet-stream" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              -H "User-Agent: VannXD-Build" \
-              "$ZIP_URL" || true)
-            echo "API download HTTP $CODE size=$(wc -c < project.zip 2>/dev/null || echo 0)"
-            if [ "$CODE" = "200" ] && [ -s project.zip ] && ! head -c 1 project.zip | grep -q '{'; then
-              download_ok=1
-            fi
+              "$ZIP_URL"
+          else
+            curl -fsSL -L -o project.zip \
+              -H "User-Agent: VannXD-Build/1.0" \
+              "$ZIP_URL"
           fi
 
-          if [ "$download_ok" != "1" ]; then
-            echo "Mode: public/direct URL (no special Accept)"
-            CODE=$(curl -sS -L -o project.zip -w "%{http_code}" \
-              -H "User-Agent: VannXD-Build" \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              "$ZIP_URL" || true)
-            echo "Direct download HTTP $CODE size=$(wc -c < project.zip 2>/dev/null || echo 0)"
-            if [ "$CODE" = "200" ] && [ -s project.zip ] && ! head -c 1 project.zip | grep -q '{'; then
-              download_ok=1
-            fi
-          fi
-
-          if [ "$download_ok" != "1" ]; then
-            echo "Mode: anonymous curl"
-            curl -sS -L -o project.zip -H "User-Agent: VannXD-Build" "$ZIP_URL" || true
-          fi
-
-          if [ ! -s project.zip ]; then
-            echo "File kosong"
+          SIZE=$(wc -c < project.zip)
+          echo "Downloaded size=$SIZE"
+          if [ "$SIZE" -lt 1000 ]; then
+            echo "File terlalu kecil — kemungkinan HTML/error page"
+            head -c 400 project.zip || true
             exit 1
           fi
-          if head -c 1 project.zip | grep -q '{'; then
-            echo "Response JSON (bukan ZIP):"
-            head -c 800 project.zip || true
+          # ZIP magic PK
+          if ! head -c 2 project.zip | grep -q "PK"; then
+            echo "Bukan file ZIP valid (magic header salah)"
+            file project.zip || true
+            head -c 200 project.zip || true
             exit 1
           fi
-          file project.zip || true
 
           mkdir -p project
           unzip -q project.zip -d project
           ROOT=$(find project -name "pubspec.yaml" | head -n 1 | xargs -r dirname)
           if [ -z "$ROOT" ]; then
-            echo "pubspec.yaml tidak ditemukan"
+            echo "pubspec.yaml tidak ditemukan di ZIP"
             find project -maxdepth 4 -type f | head -80
             exit 1
           fi
