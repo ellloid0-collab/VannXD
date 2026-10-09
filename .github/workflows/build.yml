@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       zip_url:
-        description: URL ZIP project Flutter (direct file URL)
+        description: URL ZIP project Flutter
         required: true
         type: string
       tag:
@@ -46,60 +46,68 @@ jobs:
           fi
           SIZE=$(wc -c < project.zip)
           echo "Downloaded size=$SIZE"
-          if [ "$SIZE" -lt 1000 ]; then echo "File terlalu kecil"; head -c 400 project.zip; exit 1; fi
-          if ! head -c 2 project.zip | grep -q "PK"; then echo "Bukan ZIP"; file project.zip; exit 1; fi
+          test "$SIZE" -ge 1000
+          head -c 2 project.zip | grep -q "PK"
           mkdir -p project
           unzip -q project.zip -d project
           ROOT=$(find project -name "pubspec.yaml" | head -n 1 | xargs -r dirname)
-          if [ -z "$ROOT" ]; then echo "pubspec.yaml tidak ditemukan"; find project -maxdepth 4 -type f | head -80; exit 1; fi
+          test -n "$ROOT"
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
           echo "Found project at $ROOT"
 
-      - name: Setup Flutter (latest stable)
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
-      - name: Show Flutter / Dart version
-        run: |
-          flutter --version
-          dart --version
+      - name: Flutter version
+        run: flutter --version
 
-      - name: Patch pubspec + Android toolchain
+      - name: Patch project for modern Flutter
         run: |
           set -euo pipefail
           ROOT="${{ env.PROJECT_ROOT }}"
-          PUB="$ROOT/pubspec.yaml"
-          if [ -f "$PUB" ] && grep -q "font_awesome_flutter" "$PUB"; then
-            python3 -c "
-          from pathlib import Path
-          import re
-          pub = Path(r'''$PUB''')
-          text = pub.read_text(encoding='utf-8', errors='ignore')
-          text = re.sub(r'\ndependency_overrides:\n(?:  .+\n)*', '\n', text)
-          text = re.sub(r'font_awesome_flutter\s*:\s*[^\n]+', 'font_awesome_flutter: any', text)
-          if 'font_awesome_flutter' in text and 'dependency_overrides:' not in text:
-              text = text.rstrip() + '\n\ndependency_overrides:\n  font_awesome_flutter:\n    git:\n      url: https://github.com/fluttercommunity/font_awesome_flutter.git\n      ref: master\n'
-          pub.write_text(text + '\n', encoding='utf-8')
-          print('pubspec patched')
-          "
-          fi
           PROP="$ROOT/android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$PROP" ]; then
-            sed -i -E 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-9.1.0-all.zip|' "$PROP"
+            sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip|' "$PROP"
             cat "$PROP"
           fi
-          while IFS= read -r -d '' f; do
-            sed -i -E 's/com\.android\.tools\.build:gradle:[0-9]+\.[0-9]+\.[0-9]+/com.android.tools.build:gradle:8.11.1/g' "$f" || true
-            sed -i -E 's/(id\(["'\'']com\.android\.application["'\\'']\) version )["'\\''][0-9.]+["'\\'']/\1"8.11.1"/g' "$f" || true
-            sed -i -E 's/(id\(["'\\'']com\.android\.library["'\\'']\) version )["'\\''][0-9.]+["'\\'']/\1"8.11.1"/g' "$f" || true
-            sed -i -E 's/(id\(["'\\'']org\.jetbrains\.kotlin\.android["'\\'']\) version )["'\\''][0-9.]+["'\\'']/\1"2.2.20"/g' "$f" || true
-            sed -i -E 's/org\.jetbrains\.kotlin:kotlin-gradle-plugin:[0-9.]+/org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.20/g' "$f" || true
-            sed -i -E 's/ext\.kotlin_version[[:space:]]*=[[:space:]]*["'\\''][0-9.]+["'\\'']/ext.kotlin_version = "2.2.20"/g' "$f" || true
-            sed -i -E 's/kotlin_version[[:space:]]*=[[:space:]]*["'\\''][0-9.]+["'\\'']/kotlin_version = "2.2.20"/g' "$f" || true
-          done < <(find "$ROOT/android" -type f \( -name "*.gradle" -o -name "*.gradle.kts" \) -print0 2>/dev/null)
-          echo "Android patch done"
+          python3 - "$ROOT" <<'PY'
+          import sys, re
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          android = root / "android"
+          if not android.exists():
+              print("no android dir")
+              sys.exit(0)
+          for path in list(android.rglob("*.gradle")) + list(android.rglob("*.gradle.kts")):
+              text = path.read_text(encoding="utf-8", errors="ignore")
+              orig = text
+              text = re.sub(r"com\.android\.tools\.build:gradle:[0-9.]+", "com.android.tools.build:gradle:8.11.1", text)
+              text = re.sub(r"(id\(['\"]com\.android\.application['\"]\)\s+version\s+)['\"][0-9.]+['\"]", r'\1"8.11.1"', text)
+              text = re.sub(r"(id\(['\"]com\.android\.library['\"]\)\s+version\s+)['\"][0-9.]+['\"]", r'\1"8.11.1"', text)
+              text = re.sub(r"(id\(['\"]org\.jetbrains\.kotlin\.android['\"]\)\s+version\s+)['\"][0-9.]+['\"]", r'\1"2.2.20"', text)
+              text = re.sub(r"org\.jetbrains\.kotlin:kotlin-gradle-plugin:[0-9.]+", "org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.20", text)
+              text = re.sub(r"(ext\.kotlin_version\s*=\s*)['\"][0-9.]+['\"]", r'\1"2.2.20"', text)
+              text = re.sub(r"(kotlin_version\s*=\s*)['\"][0-9.]+['\"]", r'\1"2.2.20"', text)
+              if text != orig:
+                  path.write_text(text, encoding="utf-8")
+                  print("patched", path)
+          print("android patch done")
+          PY
+          python3 - "$ROOT" <<'PY'
+          import sys, re
+          from pathlib import Path
+          pub = Path(sys.argv[1]) / "pubspec.yaml"
+          if not pub.exists():
+              sys.exit(0)
+          text = pub.read_text(encoding="utf-8", errors="ignore")
+          if "font_awesome_flutter" in text:
+              text = re.sub(r"font_awesome_flutter\s*:\s*[^\n]+", "font_awesome_flutter: any", text)
+              pub.write_text(text, encoding="utf-8")
+              print("pubspec font_awesome -> any")
+          PY
 
       - name: Flutter pub get
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -107,6 +115,62 @@ jobs:
           set -euo pipefail
           rm -f pubspec.lock
           flutter pub get
+
+      - name: Fix font_awesome IconData final class
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import re
+          from pathlib import Path
+          cache = Path.home() / ".pub-cache"
+          files = list(cache.rglob("font_awesome_flutter*/lib/**/*.dart"))
+          if not files:
+              # fallback glob
+              files = [p for p in cache.rglob("*.dart") if "font_awesome_flutter" in str(p)]
+          print("fa files", len(files))
+          helper = '''import 'package:flutter/widgets.dart';
+          IconData _fa(int c, String fam) => IconData(c, fontFamily: fam, fontPackage: 'font_awesome_flutter');
+          IconData iconDataBrands(int c) => _fa(c, 'FontAwesomeBrands');
+          IconData iconDataSolid(int c) => _fa(c, 'FontAwesomeSolid');
+          IconData iconDataRegular(int c) => _fa(c, 'FontAwesomeRegular');
+          IconData iconDataLight(int c) => _fa(c, 'FontAwesomeLight');
+          IconData iconDataThin(int c) => _fa(c, 'FontAwesomeThin');
+          IconData iconDataDuotone(int c) => _fa(c, 'FontAwesomeDuotone');
+          IconData iconDataSharpSolid(int c) => _fa(c, 'FontAwesomeSharpSolid');
+          IconData iconDataSharpRegular(int c) => _fa(c, 'FontAwesomeSharpRegular');
+          IconData iconDataSharpLight(int c) => _fa(c, 'FontAwesomeSharpLight');
+          IconData iconDataSharpThin(int c) => _fa(c, 'FontAwesomeSharpThin');
+          '''
+          for path in files:
+              if path.name == "icon_data.dart":
+                  path.write_text(helper, encoding="utf-8")
+                  print("rewrote", path)
+          repls = [
+              (r'const\s+IconDataBrands\s*\(\s*([0-9a-fxA-F]+)\s*\)', r'IconData(\1, fontFamily: "FontAwesomeBrands", fontPackage: "font_awesome_flutter")'),
+              (r'IconDataBrands\s*\(\s*([0-9a-fxA-F]+)\s*\)', r'IconData(\1, fontFamily: "FontAwesomeBrands", fontPackage: "font_awesome_flutter")'),
+              (r'const\s+IconDataSolid\s*\(\s*([0-9a-fxA-F]+)\s*\)', r'IconData(\1, fontFamily: "FontAwesomeSolid", fontPackage: "font_awesome_flutter")'),
+              (r'IconDataSolid\s*\(\s*([0-9a-fxA-F]+)\s*\)', r'IconData(\1, fontFamily: "FontAwesomeSolid", fontPackage: "font_awesome_flutter")'),
+              (r'const\s+IconDataRegular\s*\(\s*([0-9a-fxA-F]+)\s*\)', r'IconData(\1, fontFamily: "FontAwesomeRegular", fontPackage: "font_awesome_flutter")'),
+              (r'IconDataRegular\s*\(\s*([0-9a-fxA-F]+)\s*\)', r'IconData(\1, fontFamily: "FontAwesomeRegular", fontPackage: "font_awesome_flutter")'),
+              (r'const\s+IconDataLight\s*\(\s*([0-9a-fxA-F]+)\s*\)', r'IconData(\1, fontFamily: "FontAwesomeLight", fontPackage: "font_awesome_flutter")'),
+              (r'IconDataLight\s*\(\s*([0-9a-fxA-F]+)\s*\)', r'IconData(\1, fontFamily: "FontAwesomeLight", fontPackage: "font_awesome_flutter")'),
+              (r'const\s+IconDataThin\s*\(\s*([0-9a-fxA-F]+)\s*\)', r'IconData(\1, fontFamily: "FontAwesomeThin", fontPackage: "font_awesome_flutter")'),
+              (r'IconDataThin\s*\(\s*([0-9a-fxA-F]+)\s*\)', r'IconData(\1, fontFamily: "FontAwesomeThin", fontPackage: "font_awesome_flutter")'),
+              (r'const\s+IconDataDuotone\s*\(\s*([0-9a-fxA-F]+)\s*\)', r'IconData(\1, fontFamily: "FontAwesomeDuotone", fontPackage: "font_awesome_flutter")'),
+              (r'IconDataDuotone\s*\(\s*([0-9a-fxA-F]+)\s*\)', r'IconData(\1, fontFamily: "FontAwesomeDuotone", fontPackage: "font_awesome_flutter")'),
+          ]
+          for path in files:
+              if path.name == "icon_data.dart":
+                  continue
+              text = path.read_text(encoding="utf-8", errors="ignore")
+              orig = text
+              for pat, rep in repls:
+                  text = re.sub(pat, rep, text)
+              if text != orig:
+                  path.write_text(text, encoding="utf-8")
+                  print("patched", path.name)
+          print("font_awesome fix done")
+          PY
 
       - name: Build APK
         working-directory: ${{ env.PROJECT_ROOT }}
