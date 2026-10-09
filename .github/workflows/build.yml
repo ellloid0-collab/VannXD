@@ -55,39 +55,45 @@ jobs:
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
           echo "Found project at $ROOT"
 
-      - name: Patch Gradle + AGP for modern Flutter
+      - name: Patch Gradle + AGP + Kotlin for modern Flutter
         run: |
           set -euo pipefail
           ROOT="${{ env.PROJECT_ROOT }}"
+
+          # Gradle wrapper → 9.1.0 (Flutter soon requires this)
           PROP="$ROOT/android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$PROP" ]; then
-            sed -i -E 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip|' "$PROP"
-            echo "Gradle wrapper -> 8.14.3"
+            sed -i -E 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-9.1.0-all.zip|' "$PROP"
+            echo "Gradle wrapper:"
             cat "$PROP"
           fi
 
-          # Patch semua gradle files: AGP >= 8.11.1 (Flutter min), Kotlin modern
-          while IFS= read -r -d '' f; do
-            echo "Patch $f"
-            # classpath style
+          patch_file() {
+            local f="$1"
+            [ -f "$f" ] || return 0
+            # AGP
             sed -i -E 's/com\.android\.tools\.build:gradle:[0-9]+\.[0-9]+\.[0-9]+/com.android.tools.build:gradle:8.11.1/g' "$f" || true
-            # plugins DSL style
+            sed -i -E 's/(com\.android\.application["'\'']?\)[[:space:]]+version[[:space:]]+)["'\''][0-9.]+["'\'']/\1"8.11.1"/g' "$f" || true
+            sed -i -E 's/(com\.android\.library["'\'']?\)[[:space:]]+version[[:space:]]+)["'\''][0-9.]+["'\'']/\1"8.11.1"/g' "$f" || true
             sed -i -E 's/(id\([\"'\'']com\.android\.application[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"8.11.1"/g' "$f" || true
             sed -i -E 's/(id\([\"'\'']com\.android\.library[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"8.11.1"/g' "$f" || true
-            sed -i -E 's/(id\([\"'\'']org\.jetbrains\.kotlin\.android[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"2.1.0"/g' "$f" || true
-            # kotlin gradle plugin classpath
-            sed -i -E 's/org\.jetbrains\.kotlin:kotlin-gradle-plugin:[0-9.]+/org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0/g' "$f" || true
+            # Kotlin plugin — Flutter min 2.2.20
+            sed -i -E 's/(id\([\"'\'']org\.jetbrains\.kotlin\.android[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"2.2.20"/g' "$f" || true
+            sed -i -E 's/(org\.jetbrains\.kotlin\.android["'\'']?\)[[:space:]]+version[[:space:]]+)["'\''][0-9.]+[\"'\'']/\1"2.2.20"/g' "$f" || true
+            sed -i -E 's/org\.jetbrains\.kotlin:kotlin-gradle-plugin:[0-9.]+/org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.20/g' "$f" || true
+            # kotlinOptions / ext.kotlin_version
+            sed -i -E 's/kotlin_version[[:space:]]*=[[:space:]]*["'\''][0-9.]+["'\'']/kotlin_version = "2.2.20"/g' "$f" || true
+            sed -i -E 's/ext\.kotlin_version[[:space:]]*=[[:space:]]*["'\''][0-9.]+["'\'']/ext.kotlin_version = "2.2.20"/g' "$f" || true
+          }
+
+          while IFS= read -r -d '' f; do
+            echo "Patch $f"
+            patch_file "$f"
           done < <(find "$ROOT/android" -type f \( -name "*.gradle" -o -name "*.gradle.kts" \) -print0 2>/dev/null)
 
-          # settings.gradle plugins block sometimes uses different quoting
-          for f in "$ROOT/android/settings.gradle" "$ROOT/android/settings.gradle.kts" "$ROOT/android/build.gradle" "$ROOT/android/build.gradle.kts"; do
-            [ -f "$f" ] || continue
-            sed -i -E 's/com\.android\.application["'\'']?\)?[[:space:]]+version[[:space:]]+["'\''][0-9.]+["'\'']/com.android.application") version "8.11.1"/g' "$f" || true
-          done
-
-          echo "==== android gradle files (grep AGP) ===="
-          grep -RIn "com.android|agp|gradle:" "$ROOT/android" --include="*.gradle" --include="*.gradle.kts" 2>/dev/null | head -40 || true
-          echo "Gradle+AGP patch done"
+          echo "==== grep kotlin/AGP ===="
+          grep -RIn "kotlin\|com.android\|agp\|gradle:" "$ROOT/android" --include="*.gradle" --include="*.gradle.kts" 2>/dev/null | head -50 || true
+          echo "Patch done"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
