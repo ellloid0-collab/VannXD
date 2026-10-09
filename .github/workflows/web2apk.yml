@@ -1,0 +1,101 @@
+name: Web2Apps Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      web_url:
+        description: Website URL
+        required: true
+        type: string
+      app_name:
+        description: App name
+        required: true
+        type: string
+      icon_url:
+        description: Icon image URL
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Create WebView app
+        run: |
+          set -e
+          APP_NAME='${{ inputs.app_name }}'
+          WEB_URL='${{ inputs.web_url }}'
+          # sanitize package-ish name
+          SAFE=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+          if [ -z "$SAFE" ]; then SAFE=webapp; fi
+          flutter create --org com.vannxd --project-name "$SAFE" app
+          cd app
+          # minimal WebView main.dart
+          cat > lib/main.dart <<'DART'
+import 'package:flutter/material.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+
+void main() => runApp(const MyApp());
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        body: SafeArea(
+          child: WebViewWidget(
+            controller: WebViewController()
+              ..setJavaScriptMode(JavaScriptMode.unrestricted)
+              ..loadRequest(Uri.parse(const String.fromEnvironment('WEB_URL', defaultValue: 'https://example.com'))),
+          ),
+        ),
+      ),
+    );
+  }
+}
+DART
+          # inject URL via dart-define later; also patch pubspec for webview
+          if ! grep -q webview_flutter pubspec.yaml; then
+            echo "  webview_flutter: ^4.7.0" >> pubspec.yaml
+          fi
+          flutter pub get
+
+      - name: Optional icon
+        run: |
+          set -e
+          ICON='${{ inputs.icon_url }}'
+          if [ -n "$ICON" ]; then
+            mkdir -p app/assets
+            curl -fsSL "$ICON" -o app/assets/icon.png || true
+          fi
+
+      - name: Build release APK
+        working-directory: app
+        run: flutter build apk --release --dart-define=WEB_URL=${{ inputs.web_url }}
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          find app -path "*/flutter-apk/*.apk" -exec cp {} out/ \;
+          ls -lah out
+          test -n "$(ls -A out/*.apk 2>/dev/null)"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-build
+          path: out/*.apk
+          if-no-files-found: error
