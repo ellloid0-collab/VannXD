@@ -33,36 +33,57 @@ jobs:
           ZIP_URL: ${{ inputs.zip_url }}
         run: |
           set -euo pipefail
-          echo "Downloading from: $ZIP_URL"
-          # GitHub release asset (API URL) butuh Accept octet-stream + token
-          # browser_download_url draft juga sering butuh auth
-          HTTP_CODE=$(curl -sS -L -o project.zip -w "%{http_code}" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/octet-stream" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            -H "User-Agent: VannXD-Build" \
-            "$ZIP_URL" || true)
-          echo "HTTP $HTTP_CODE size=$(wc -c < project.zip)"
-          # Fallback: coba tanpa octet-stream (kalau URL sudah public CDN)
-          if [ ! -s project.zip ] || [ "$HTTP_CODE" = "415" ] || [ "$HTTP_CODE" = "404" ]; then
-            echo "Retry with generic download..."
-            curl -fsSL -L -o project.zip \
+          echo "ZIP_URL=$ZIP_URL"
+          rm -f project.zip
+
+          download_ok=0
+          if echo "$ZIP_URL" | grep -q "api.github.com"; then
+            echo "Mode: GitHub API asset"
+            CODE=$(curl -sS -L -o project.zip -w "%{http_code}" \
               -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/octet-stream" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
               -H "User-Agent: VannXD-Build" \
-              "$ZIP_URL" || curl -fsSL -L -o project.zip "$ZIP_URL"
+              "$ZIP_URL" || true)
+            echo "API download HTTP $CODE size=$(wc -c < project.zip 2>/dev/null || echo 0)"
+            if [ "$CODE" = "200" ] && [ -s project.zip ] && ! head -c 1 project.zip | grep -q '{'; then
+              download_ok=1
+            fi
           fi
-          # Kalau masih JSON error, tampilkan
+
+          if [ "$download_ok" != "1" ]; then
+            echo "Mode: public/direct URL (no special Accept)"
+            CODE=$(curl -sS -L -o project.zip -w "%{http_code}" \
+              -H "User-Agent: VannXD-Build" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              "$ZIP_URL" || true)
+            echo "Direct download HTTP $CODE size=$(wc -c < project.zip 2>/dev/null || echo 0)"
+            if [ "$CODE" = "200" ] && [ -s project.zip ] && ! head -c 1 project.zip | grep -q '{'; then
+              download_ok=1
+            fi
+          fi
+
+          if [ "$download_ok" != "1" ]; then
+            echo "Mode: anonymous curl"
+            curl -sS -L -o project.zip -H "User-Agent: VannXD-Build" "$ZIP_URL" || true
+          fi
+
+          if [ ! -s project.zip ]; then
+            echo "File kosong"
+            exit 1
+          fi
           if head -c 1 project.zip | grep -q '{'; then
-            echo "Download returned JSON (bukan ZIP):"
-            head -c 500 project.zip || true
+            echo "Response JSON (bukan ZIP):"
+            head -c 800 project.zip || true
             exit 1
           fi
           file project.zip || true
+
           mkdir -p project
           unzip -q project.zip -d project
           ROOT=$(find project -name "pubspec.yaml" | head -n 1 | xargs -r dirname)
           if [ -z "$ROOT" ]; then
-            echo "pubspec.yaml tidak ditemukan di ZIP"
+            echo "pubspec.yaml tidak ditemukan"
             find project -maxdepth 4 -type f | head -80
             exit 1
           fi
