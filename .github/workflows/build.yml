@@ -1,0 +1,74 @@
+name: Flutter Zip2Apps Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: URL ZIP project Flutter
+        required: true
+        type: string
+      tag:
+        description: Release tag
+        required: true
+        type: string
+      build_type:
+        description: debug or release
+        required: true
+        type: string
+        default: release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download project ZIP
+        run: |
+          set -e
+          curl -fsSL "${{ inputs.zip_url }}" -o project.zip
+          mkdir -p project
+          unzip -q project.zip -d project
+          ROOT=$(find project -name "pubspec.yaml" | head -n 1 | xargs -r dirname)
+          if [ -z "$ROOT" ]; then
+            echo "pubspec.yaml tidak ditemukan di ZIP"
+            find project -maxdepth 3 -type f | head -50
+            exit 1
+          fi
+          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "Found project at $ROOT"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: flutter pub get
+
+      - name: Build APK
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: |
+          if [ "${{ inputs.build_type }}" = "debug" ]; then
+            flutter build apk --debug
+          else
+            flutter build apk --release
+          fi
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          find "${{ env.PROJECT_ROOT }}" -path "*/flutter-apk/*.apk" -print -exec cp {} out/ \;
+          ls -lah out || true
+          test -n "$(ls -A out/*.apk 2>/dev/null)"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-build
+          path: out/*.apk
+          if-no-files-found: error
