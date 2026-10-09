@@ -20,7 +20,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -54,39 +54,48 @@ jobs:
           if [ -z "$ROOT" ]; then echo "pubspec.yaml tidak ditemukan"; find project -maxdepth 4 -type f | head -80; exit 1; fi
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
           echo "Found project at $ROOT"
+          echo "==== pubspec environment ===="
+          grep -A5 "^environment:" "$ROOT/pubspec.yaml" || true
 
-      - name: Patch Gradle + AGP + Kotlin
+      - name: Setup Flutter (latest stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Show Flutter / Dart version
+        run: |
+          flutter --version
+          dart --version
+
+      - name: Patch Android toolchain to match Flutter
         run: |
           set -euo pipefail
           ROOT="${{ env.PROJECT_ROOT }}"
+          # Baca rekomendasi kasar: pakai Gradle 8.14.3 + AGP 8.11.1 + Kotlin 2.2.20
+          # (cocok Flutter stable modern / Dart 3.8+)
           PROP="$ROOT/android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$PROP" ]; then
-            # Flutter 3.24.x nyaman dengan Gradle 8.7–8.9
-            sed -i -E 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-all.zip|' "$PROP"
-            cat "$PROP"
+            sed -i -E 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip|' "$PROP"
+            echo "Gradle wrapper:"; cat "$PROP"
           fi
           while IFS= read -r -d '' f; do
-            sed -i -E 's/com\.android\.tools\.build:gradle:[0-9]+\.[0-9]+\.[0-9]+/com.android.tools.build:gradle:8.6.0/g' "$f" || true
-            sed -i -E 's/(id\([\"'\'']com\.android\.application[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"8.6.0"/g' "$f" || true
-            sed -i -E 's/(id\([\"'\'']com\.android\.library[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"8.6.0"/g' "$f" || true
-            sed -i -E 's/(id\([\"'\'']org\.jetbrains\.kotlin\.android[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"1.9.24"/g' "$f" || true
-            sed -i -E 's/org\.jetbrains\.kotlin:kotlin-gradle-plugin:[0-9.]+/org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.24/g' "$f" || true
-            sed -i -E 's/ext\.kotlin_version[[:space:]]*=[[:space:]]*["'\''][0-9.]+["'\'']/ext.kotlin_version = "1.9.24"/g' "$f" || true
-            sed -i -E 's/kotlin_version[[:space:]]*=[[:space:]]*["'\''][0-9.]+["'\'']/kotlin_version = "1.9.24"/g' "$f" || true
+            sed -i -E 's/com\.android\.tools\.build:gradle:[0-9]+\.[0-9]+\.[0-9]+/com.android.tools.build:gradle:8.11.1/g' "$f" || true
+            sed -i -E 's/(id\([\"'\'']com\.android\.application[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"8.11.1"/g' "$f" || true
+            sed -i -E 's/(id\([\"'\'']com\.android\.library[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"8.11.1"/g' "$f" || true
+            sed -i -E 's/(id\([\"'\'']org\.jetbrains\.kotlin\.android[\"'\'']\) version )[\"'\''][0-9.]+[\"'\'']/\1"2.2.20"/g' "$f" || true
+            sed -i -E 's/org\.jetbrains\.kotlin:kotlin-gradle-plugin:[0-9.]+/org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.20/g' "$f" || true
+            sed -i -E 's/ext\.kotlin_version[[:space:]]*=[[:space:]]*["'\''][0-9.]+["'\'']/ext.kotlin_version = "2.2.20"/g' "$f" || true
+            sed -i -E 's/kotlin_version[[:space:]]*=[[:space:]]*["'\''][0-9.]+["'\'']/kotlin_version = "2.2.20"/g' "$f" || true
           done < <(find "$ROOT/android" -type f \( -name "*.gradle" -o -name "*.gradle.kts" \) -print0 2>/dev/null)
-          echo "Patch done for Flutter 3.24 stack"
-
-      - name: Setup Flutter 3.24.5
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.24.5"
-          channel: stable
-          cache: true
+          echo "Android patch done"
 
       - name: Flutter pub get
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
-          flutter --version
+          set -euo pipefail
+          # Hapus lock lama biar resolve ulang ke SDK runner
+          rm -f pubspec.lock
           flutter pub get
 
       - name: Build APK
