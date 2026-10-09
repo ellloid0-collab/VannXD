@@ -21,20 +21,49 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Download project ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP_URL: ${{ inputs.zip_url }}
         run: |
-          set -e
-          curl -fsSL "${{ inputs.zip_url }}" -o project.zip
+          set -euo pipefail
+          echo "Downloading from: $ZIP_URL"
+          # GitHub release asset (API URL) butuh Accept octet-stream + token
+          # browser_download_url draft juga sering butuh auth
+          HTTP_CODE=$(curl -sS -L -o project.zip -w "%{http_code}" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "User-Agent: VannXD-Build" \
+            "$ZIP_URL" || true)
+          echo "HTTP $HTTP_CODE size=$(wc -c < project.zip)"
+          # Fallback: coba tanpa octet-stream (kalau URL sudah public CDN)
+          if [ ! -s project.zip ] || [ "$HTTP_CODE" = "415" ] || [ "$HTTP_CODE" = "404" ]; then
+            echo "Retry with generic download..."
+            curl -fsSL -L -o project.zip \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "User-Agent: VannXD-Build" \
+              "$ZIP_URL" || curl -fsSL -L -o project.zip "$ZIP_URL"
+          fi
+          # Kalau masih JSON error, tampilkan
+          if head -c 1 project.zip | grep -q '{'; then
+            echo "Download returned JSON (bukan ZIP):"
+            head -c 500 project.zip || true
+            exit 1
+          fi
+          file project.zip || true
           mkdir -p project
           unzip -q project.zip -d project
           ROOT=$(find project -name "pubspec.yaml" | head -n 1 | xargs -r dirname)
           if [ -z "$ROOT" ]; then
             echo "pubspec.yaml tidak ditemukan di ZIP"
-            find project -maxdepth 3 -type f | head -50
+            find project -maxdepth 4 -type f | head -80
             exit 1
           fi
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
