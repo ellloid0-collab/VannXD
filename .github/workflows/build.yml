@@ -50,10 +50,16 @@ jobs:
           head -c 2 project.zip | grep -q "PK"
           mkdir -p project
           unzip -q project.zip -d project
-          ROOT=$(find project -name "pubspec.yaml" | head -n 1 | xargs -r dirname)
+          # Jangan pakai xargs — path bisa berisi spasi (contoh: "alternity v1 jie")
+          PUBSPEC=$(find project -name "pubspec.yaml" -print -quit)
+          test -n "$PUBSPEC"
+          ROOT=$(dirname "$PUBSPEC")
           test -n "$ROOT"
-          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
-          echo "Found project at $ROOT"
+          # GITHUB_ENV aman untuk path ber-spasi
+          echo "PROJECT_ROOT<<EOF" >> "$GITHUB_ENV"
+          echo "$ROOT" >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+          echo "Found project at: $ROOT"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -68,6 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           ROOT="${{ env.PROJECT_ROOT }}"
+          echo "Using PROJECT_ROOT=$ROOT"
           PROP="$ROOT/android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$PROP" ]; then
             sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip|' "$PROP"
