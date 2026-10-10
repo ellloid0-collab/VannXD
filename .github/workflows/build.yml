@@ -1,6 +1,6 @@
 name: Flutter Zip2Apps Build
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       zip_url:
@@ -75,30 +75,38 @@ jobs:
             sed -i "s|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-all.zip|" "$PROP"
             cat "$PROP"
           fi
-          python3 -c '
-import re,sys
-from pathlib import Path
-root=Path(sys.argv[1]); android=root/"android"
-if android.exists():
-  for path in [p for p in list(android.rglob("*.gradle"))+list(android.rglob("*.gradle.kts")) if p.is_file()]:
-    text=path.read_text(encoding="utf-8",errors="ignore"); orig=text
-    text=re.sub(r"com\\.android\\.tools\\.build:gradle:[0-9.]+","com.android.tools.build:gradle:8.11.1",text)
-    if text!=orig: path.write_text(text,encoding="utf-8"); print("patched",path)
-print("android done")
-' "$ROOT"
+          export ROOT
+          python3 <<'PY'
+          import re, os
+          from pathlib import Path
+          root = Path(os.environ["ROOT"])
+          android = root / "android"
+          if not android.exists():
+              print("no android dir")
+              raise SystemExit(0)
+          for path in list(android.rglob("*.gradle")) + list(android.rglob("*.gradle.kts")):
+              if not path.is_file():
+                  continue
+              text = path.read_text(encoding="utf-8", errors="ignore")
+              orig = text
+              text = re.sub(r"com\.android\.tools\.build:gradle:[0-9.]+", "com.android.tools.build:gradle:8.11.1", text)
+              if text != orig:
+                  path.write_text(text, encoding="utf-8")
+                  print("patched", path)
+          print("android done")
+          PY
 
       - name: Flutter pub get
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -euo pipefail
           rm -f pubspec.lock
-          # force any FA version so we can stub it
           if [ -f pubspec.yaml ]; then
-            sed -i -E "s|font_awesome_flutter\s*:\s*.*|font_awesome_flutter: any|" pubspec.yaml || true
+            sed -i -E "s|font_awesome_flutter[[:space:]]*:[[:space:]]*.*|font_awesome_flutter: any|" pubspec.yaml || true
           fi
           flutter pub get
 
-      - name: Nuclear FA stub (safe Icons only)
+      - name: Nuclear FA stub
         run: |
           set -euo pipefail
           python3 <<'PY'
@@ -119,7 +127,6 @@ print("android done")
               print("no FA — skip")
               raise SystemExit(0)
 
-          # Collect every static const name that looks like an icon
           icon_names = set()
           for root in roots:
               for dart in root.rglob("*.dart"):
@@ -129,98 +136,45 @@ print("android done")
                       continue
                   for m in re.finditer(r"static\s+const\s+(?:IconData|FaIconData|FalconData|\w+)\s+(\w+)\s*=", txt):
                       icon_names.add(m.group(1))
-                  for m in re.finditer(r"static\s+const\s+(\w+)\s*=\s*(?:IconData|FaIconData|FalconData)", txt):
-                      icon_names.add(m.group(1))
-                  for m in re.finditer(r"static\s+const\s+\w+\s+(\w+)\s*=", txt):
+                  for m in re.finditer(r"static\s+const\s+(\w+)\s*=\s*IconData", txt):
                       icon_names.add(m.group(1))
 
-          bad = {
-              "IconData", "FaIcon", "FontAwesomeIcons", "index", "main",
-              "toString", "hashCode", "runtimeType", "values", "all"
-          }
-          icon_names = sorted(
-              n for n in icon_names
-              if n.isidentifier() and n not in bad and not n.startswith("_") and len(n) > 1
-          )
+          bad = {"IconData", "FaIcon", "FontAwesomeIcons", "index", "main", "toString", "hashCode", "runtimeType"}
+          icon_names = sorted(n for n in icon_names if n.isidentifier() and n not in bad and not n.startswith("_"))
           if len(icon_names) < 5:
               icon_names = [
-                  "home", "user", "users", "gear", "cog", "settings", "search",
-                  "heart", "star", "check", "xmark", "plus", "minus", "bars",
-                  "camera", "image", "phone", "envelope", "bell", "comment",
-                  "comments", "share", "link", "globe", "lock", "unlock", "eye",
-                  "download", "upload", "file", "folder", "calendar", "clock",
-                  "map", "trash", "pen", "list", "filter", "play", "pause",
-                  "whatsapp", "telegram", "facebook", "instagram", "twitter",
+                  "home", "user", "users", "gear", "cog", "settings", "search", "heart", "star",
+                  "check", "xmark", "times", "close", "plus", "minus", "bars", "camera", "image",
+                  "phone", "envelope", "bell", "comment", "comments", "share", "link", "globe",
+                  "lock", "unlock", "eye", "download", "upload", "file", "folder", "calendar",
+                  "clock", "map", "trash", "pen", "list", "filter", "arrowLeft", "arrowRight",
+                  "arrowUp", "arrowDown", "chevronLeft", "chevronRight", "info", "warning",
+                  "play", "pause", "whatsapp", "telegram", "facebook", "instagram", "twitter",
                   "youtube", "github", "google", "apple", "android"
               ]
-          print("icon count:", len(icon_names))
 
-          # ONLY real Material Icons that exist in Flutter stable
           material_map = {
-              "home": "Icons.home",
-              "user": "Icons.person",
-              "users": "Icons.people",
-              "person": "Icons.person",
-              "people": "Icons.people",
-              "gear": "Icons.settings",
-              "cog": "Icons.settings",
-              "settings": "Icons.settings",
-              "search": "Icons.search",
-              "heart": "Icons.favorite",
-              "star": "Icons.star",
-              "check": "Icons.check",
-              "xmark": "Icons.close",
-              "times": "Icons.close",
-              "close": "Icons.close",
-              "plus": "Icons.add",
-              "minus": "Icons.remove",
-              "bars": "Icons.menu",
-              "menu": "Icons.menu",
-              "camera": "Icons.camera_alt",
-              "image": "Icons.image",
-              "phone": "Icons.phone",
-              "envelope": "Icons.email",
-              "email": "Icons.email",
-              "bell": "Icons.notifications",
-              "comment": "Icons.comment",
-              "comments": "Icons.comment",          # plural -> singular
-              "share": "Icons.share",
-              "link": "Icons.link",
-              "globe": "Icons.public",
-              "lock": "Icons.lock",
-              "unlock": "Icons.lock_open",
-              "eye": "Icons.visibility",
-              "download": "Icons.download",
-              "upload": "Icons.upload",
-              "file": "Icons.insert_drive_file",
-              "folder": "Icons.folder",
-              "calendar": "Icons.calendar_today",
-              "clock": "Icons.access_time",
-              "map": "Icons.map",
-              "trash": "Icons.delete",
-              "pen": "Icons.edit",
-              "edit": "Icons.edit",
-              "list": "Icons.list",
-              "filter": "Icons.filter_list",
-              "arrowLeft": "Icons.arrow_back",
-              "arrowRight": "Icons.arrow_forward",
-              "arrowUp": "Icons.arrow_upward",
-              "arrowDown": "Icons.arrow_downward",
-              "chevronLeft": "Icons.chevron_left",
-              "chevronRight": "Icons.chevron_right",
-              "info": "Icons.info",
-              "warning": "Icons.warning",
-              "play": "Icons.play_arrow",
-              "pause": "Icons.pause",
-              "whatsapp": "Icons.chat",
-              "telegram": "Icons.send",
-              "facebook": "Icons.facebook",
-              "instagram": "Icons.camera_alt",
-              "twitter": "Icons.alternate_email",
-              "youtube": "Icons.play_circle",
-              "github": "Icons.code",
-              "google": "Icons.g_mobiledata",
-              "apple": "Icons.apple",
+              "home": "Icons.home", "user": "Icons.person", "users": "Icons.people",
+              "gear": "Icons.settings", "cog": "Icons.settings", "settings": "Icons.settings",
+              "search": "Icons.search", "heart": "Icons.favorite", "star": "Icons.star",
+              "check": "Icons.check", "xmark": "Icons.close", "times": "Icons.close",
+              "close": "Icons.close", "plus": "Icons.add", "minus": "Icons.remove",
+              "bars": "Icons.menu", "camera": "Icons.camera_alt", "image": "Icons.image",
+              "phone": "Icons.phone", "envelope": "Icons.email", "bell": "Icons.notifications",
+              "comment": "Icons.comment", "comments": "Icons.comment", "share": "Icons.share",
+              "link": "Icons.link", "globe": "Icons.public", "lock": "Icons.lock",
+              "unlock": "Icons.lock_open", "eye": "Icons.visibility", "download": "Icons.download",
+              "upload": "Icons.upload", "file": "Icons.insert_drive_file", "folder": "Icons.folder",
+              "calendar": "Icons.calendar_today", "clock": "Icons.access_time", "map": "Icons.map",
+              "trash": "Icons.delete", "pen": "Icons.edit", "list": "Icons.list",
+              "filter": "Icons.filter_list", "arrowLeft": "Icons.arrow_back",
+              "arrowRight": "Icons.arrow_forward", "arrowUp": "Icons.arrow_upward",
+              "arrowDown": "Icons.arrow_downward", "chevronLeft": "Icons.chevron_left",
+              "chevronRight": "Icons.chevron_right", "info": "Icons.info", "warning": "Icons.warning",
+              "play": "Icons.play_arrow", "pause": "Icons.pause", "whatsapp": "Icons.chat",
+              "telegram": "Icons.send", "facebook": "Icons.facebook", "instagram": "Icons.camera",
+              "twitter": "Icons.alternate_email", "youtube": "Icons.play_circle",
+              "github": "Icons.code", "google": "Icons.g_mobiledata", "apple": "Icons.apple",
               "android": "Icons.android",
           }
 
@@ -228,8 +182,6 @@ print("android done")
               "library font_awesome_flutter;",
               "import 'package:flutter/material.dart';",
               "",
-              "/// Nuclear stub — every icon is a real Material Icon.",
-              "/// Compatible with Flutter where IconData is final.",
               "class FaIcon extends StatelessWidget {",
               "  final IconData icon;",
               "  final double? size;",
@@ -238,10 +190,7 @@ print("android done")
               "  final TextDirection? textDirection;",
               "  const FaIcon(this.icon, {super.key, this.size, this.color, this.semanticLabel, this.textDirection});",
               "  @override",
-              "  Widget build(BuildContext context) => Icon(",
-              "    icon, size: size, color: color,",
-              "    semanticLabel: semanticLabel, textDirection: textDirection,",
-              "  );",
+              "  Widget build(BuildContext context) => Icon(icon, size: size, color: color, semanticLabel: semanticLabel, textDirection: textDirection);",
               "}",
               "",
               "class FontAwesomeIcons {",
@@ -275,7 +224,7 @@ print("android done")
                   encoding="utf-8",
               )
               print("stub installed at", root)
-          print("done — all icons mapped to valid Material Icons")
+          print("done")
           PY
 
       - name: Build APK
