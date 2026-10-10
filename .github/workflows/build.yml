@@ -1,6 +1,6 @@
 name: Flutter Zip2Apps Build
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       zip_url:
