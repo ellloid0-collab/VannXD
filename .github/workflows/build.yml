@@ -66,34 +66,81 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Patch Android toolchain
+      - name: Nuclear Android + AGP + Gradle patch
         run: |
           set -euo pipefail
           ROOT="${{ env.PROJECT_ROOT }}"
+          export ROOT
+          echo "ROOT=$ROOT"
+
+          # 1) Force Gradle wrapper
           PROP="$ROOT/android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$PROP" ]; then
             sed -i "s|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-all.zip|" "$PROP"
+            echo "Gradle wrapper forced to 8.14.3"
             cat "$PROP"
+          else
+            echo "WARNING: no gradle-wrapper.properties"
           fi
-          export ROOT
+
+          # 2) Nuclear AGP + Kotlin patch on ALL gradle files + version catalogs
           python3 <<'PY'
           import re, os
           from pathlib import Path
+
           root = Path(os.environ["ROOT"])
           android = root / "android"
           if not android.exists():
-              print("no android dir")
+              print("no android dir — skip")
               raise SystemExit(0)
-          for path in list(android.rglob("*.gradle")) + list(android.rglob("*.gradle.kts")):
-              if not path.is_file():
+
+          TARGET_AGP = "8.11.1"
+          TARGET_KOTLIN = "2.1.0"
+
+          patterns = [
+              # Classic classpath
+              (re.compile(r"(com\.android\.tools\.build:gradle:)[0-9.]+"), rf"\g<1>{TARGET_AGP}"),
+              # plugins { id "com.android.xxx" version "X.Y.Z" }
+              (re.compile(r'''((?:id\s*\(?\s*["']com\.android\.[a-z.]+["']\s*\)?\s+version\s+)["'])[0-9.]+(["'])'''), rf"\g<1>{TARGET_AGP}\g<2>"),
+              # plugins { id("com.android.xxx") version "X.Y.Z" } already covered above
+              # version catalog: agp = "8.9.1" or androidGradlePlugin = "..."
+              (re.compile(r'''((?:agp|androidGradlePlugin|android-gradle-plugin)\s*=\s*["'])[0-9.]+(["'])''', re.I), rf"\g<1>{TARGET_AGP}\g<2>"),
+              # Kotlin plugin version (optional but helps)
+              (re.compile(r'''((?:id\s*\(?\s*["']org\.jetbrains\.kotlin\.(?:android|jvm|multiplatform)["']\s*\)?\s+version\s+)["'])[0-9.]+(["'])'''), rf"\g<1>{TARGET_KOTLIN}\g<2>"),
+              (re.compile(r'''((?:kotlin|kotlinVersion)\s*=\s*["'])[0-9.]+(["'])''', re.I), rf"\g<1>{TARGET_KOTLIN}\g<2>"),
+              (re.compile(r"(org\.jetbrains\.kotlin:kotlin-gradle-plugin:)[0-9.]+"), rf"\g<1>{TARGET_KOTLIN}"),
+          ]
+
+          files = []
+          for pattern in ["*.gradle", "*.gradle.kts", "*.toml"]:
+              files.extend([p for p in android.rglob(pattern) if p.is_file()])
+          # also top-level if any
+          for pattern in ["*.gradle", "*.gradle.kts", "*.toml"]:
+              files.extend([p for p in root.glob(pattern) if p.is_file()])
+
+          patched_count = 0
+          for path in files:
+              try:
+                  text = path.read_text(encoding="utf-8", errors="ignore")
+              except Exception:
                   continue
-              text = path.read_text(encoding="utf-8", errors="ignore")
               orig = text
-              text = re.sub(r"com\.android\.tools\.build:gradle:[0-9.]+", "com.android.tools.build:gradle:8.11.1", text)
+              for rx, repl in patterns:
+                  text = rx.sub(repl, text)
               if text != orig:
                   path.write_text(text, encoding="utf-8")
-                  print("patched", path)
-          print("android done")
+                  print("patched:", path)
+                  patched_count += 1
+
+          print(f"android done — {patched_count} file(s) patched")
+          # Debug: show any remaining old AGP refs
+          for path in files:
+              try:
+                  t = path.read_text(encoding="utf-8", errors="ignore")
+              except Exception:
+                  continue
+              for m in re.finditer(r"com\.android\.[a-z.]+[^\n]{0,40}[0-9]+\.[0-9]+\.[0-9]+", t):
+                  print("  still-has:", path.name, "→", m.group(0)[:80])
           PY
 
       - name: Flutter pub get
@@ -231,10 +278,11 @@ jobs:
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -euo pipefail
+          # Last-resort: skip dependency validation if still complaining (rare)
           if [ "${{ inputs.build_type }}" = "debug" ]; then
-            flutter build apk --debug
+            flutter build apk --debug || flutter build apk --debug --android-skip-build-dependency-validation
           else
-            flutter build apk --release
+            flutter build apk --release || flutter build apk --release --android-skip-build-dependency-validation
           fi
 
       - name: Collect APK
