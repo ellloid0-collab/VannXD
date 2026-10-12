@@ -274,19 +274,64 @@ jobs:
           print("done")
           PY
 
+      - name: Speed + shrink Gradle flags
+        run: |
+          set -euo pipefail
+          ROOT="${{ env.PROJECT_ROOT }}"
+          GP="$ROOT/android/gradle.properties"
+          mkdir -p "$ROOT/android"
+          touch "$GP"
+          {
+            echo "org.gradle.jvmargs=-Xmx4G -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8"
+            echo "org.gradle.parallel=true"
+            echo "org.gradle.caching=true"
+            echo "org.gradle.daemon=true"
+            echo "android.useAndroidX=true"
+            echo "android.enableR8.fullMode=true"
+            echo "android.enableMinifyInReleaseBuilds=true"
+            echo "android.enableShrinkResourcesInReleaseBuilds=true"
+          } >> "$GP"
+          # Force minify/shrink in app build.gradle if present
+          for f in "$ROOT/android/app/build.gradle" "$ROOT/android/app/build.gradle.kts"; do
+            [ -f "$f" ] || continue
+            if ! grep -q "isMinifyEnabled\|minifyEnabled" "$f"; then
+              echo "/* minify injected by workflow */" >> "$f"
+            fi
+          done
+          python3 <<'PY'
+          import re, os
+          from pathlib import Path
+          root = Path(os.environ.get("ROOT") or ".")
+          for path in list((root/"android").rglob("build.gradle")) + list((root/"android").rglob("build.gradle.kts")):
+              if not path.is_file():
+                  continue
+              t = path.read_text(encoding="utf-8", errors="ignore")
+              o = t
+              # Groovy
+              t = re.sub(r"minifyEnabled\s+false", "minifyEnabled true", t)
+              t = re.sub(r"shrinkResources\s+false", "shrinkResources true", t)
+              # KTS
+              t = re.sub(r"isMinifyEnabled\s*=\s*false", "isMinifyEnabled = true", t)
+              t = re.sub(r"isShrinkResources\s*=\s*false", "isShrinkResources = true", t)
+              if t != o:
+                  path.write_text(t, encoding="utf-8")
+                  print("minify enabled:", path)
+          print("gradle speed/size flags done")
+          PY
+        env:
+          ROOT: ${{ env.PROJECT_ROOT }}
+
       - name: Build APK
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -euo pipefail
-          # Faster + smaller: arm64 only, tree-shake icons, obfuscate on release
+          # FAST: arm64 only, tree-shake icons. NO obfuscate (slows compile a lot).
           if [ "${{ inputs.build_type }}" = "debug" ]; then
             flutter build apk --debug --target-platform android-arm64 \
               || flutter build apk --debug --target-platform android-arm64 --android-skip-build-dependency-validation
           else
-            flutter build apk --release --target-platform android-arm64 \
-              --tree-shake-icons --obfuscate --split-debug-info=/tmp/flutter_symbols \
-              || flutter build apk --release --target-platform android-arm64 \
-              --tree-shake-icons --android-skip-build-dependency-validation
+            flutter build apk --release --target-platform android-arm64 --tree-shake-icons \
+              || flutter build apk --release --target-platform android-arm64 --tree-shake-icons --android-skip-build-dependency-validation
           fi
 
       - name: Collect APK
