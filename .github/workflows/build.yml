@@ -278,11 +278,15 @@ jobs:
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -euo pipefail
-          # Last-resort: skip dependency validation if still complaining (rare)
+          # Faster + smaller: arm64 only, tree-shake icons, obfuscate on release
           if [ "${{ inputs.build_type }}" = "debug" ]; then
-            flutter build apk --debug || flutter build apk --debug --android-skip-build-dependency-validation
+            flutter build apk --debug --target-platform android-arm64 \
+              || flutter build apk --debug --target-platform android-arm64 --android-skip-build-dependency-validation
           else
-            flutter build apk --release || flutter build apk --release --android-skip-build-dependency-validation
+            flutter build apk --release --target-platform android-arm64 \
+              --tree-shake-icons --obfuscate --split-debug-info=/tmp/flutter_symbols \
+              || flutter build apk --release --target-platform android-arm64 \
+              --tree-shake-icons --android-skip-build-dependency-validation
           fi
 
       - name: Collect APK
