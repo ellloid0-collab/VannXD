@@ -95,7 +95,7 @@ jobs:
               raise SystemExit(0)
 
           TARGET_AGP = "8.11.1"
-          TARGET_KOTLIN = "2.1.0"
+          TARGET_KOTLIN = "2.2.20"
 
           patterns = [
               # Classic classpath
@@ -109,6 +109,8 @@ jobs:
               (re.compile(r'''((?:id\s*\(?\s*["']org\.jetbrains\.kotlin\.(?:android|jvm|multiplatform)["']\s*\)?\s+version\s+)["'])[0-9.]+(["'])'''), rf"\g<1>{TARGET_KOTLIN}\g<2>"),
               (re.compile(r'''((?:kotlin|kotlinVersion)\s*=\s*["'])[0-9.]+(["'])''', re.I), rf"\g<1>{TARGET_KOTLIN}\g<2>"),
               (re.compile(r"(org\.jetbrains\.kotlin:kotlin-gradle-plugin:)[0-9.]+"), rf"\g<1>{TARGET_KOTLIN}"),
+              (re.compile(r"""((?:ext\.)?kotlin_version\s*=\s*['"])[0-9.]+(['"])"""), rf"\g<1>{TARGET_KOTLIN}\g<2>"),
+              (re.compile(r"""((?:ext\.)?kotlinVersion\s*=\s*['"])[0-9.]+(['"])"""), rf"\g<1>{TARGET_KOTLIN}\g<2>"),
           ]
 
           files = []
@@ -142,6 +144,18 @@ jobs:
               for m in re.finditer(r"com\.android\.[a-z.]+[^\n]{0,40}[0-9]+\.[0-9]+\.[0-9]+", t):
                   print("  still-has:", path.name, "→", m.group(0)[:80])
           PY
+
+          # 3) Force Kotlin >= 2.2.20 on every gradle file (Flutter min)
+          find "$ROOT/android" -type f \( -name "*.gradle" -o -name "*.gradle.kts" -o -name "*.toml" \) 2>/dev/null | while read -r f; do
+            # bump common version forms to 2.2.20
+            sed -i -E \
+              -e 's/(org\.jetbrains\.kotlin\.[a-z."() ]*version[: =]*["'\''"]?)2\.[01]\.[0-9]+/\12.2.20/g' \
+              -e 's/(kotlin[_-]?[Vv]ersion\s*=\s*["'\''"]?)2\.[01]\.[0-9]+/\12.2.20/g' \
+              -e 's/(kotlin-gradle-plugin:)2\.[01]\.[0-9]+/\12.2.20/g' \
+              -e 's/(kotlin\s*=\s*["'\''"]?)2\.[01]\.[0-9]+/\12.2.20/g' \
+              "$f" 2>/dev/null || true
+          done
+          echo "Kotlin force-bump to 2.2.20 done"
 
       - name: Flutter pub get
         working-directory: ${{ env.PROJECT_ROOT }}
