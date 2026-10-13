@@ -288,7 +288,7 @@ jobs:
           print("done")
           PY
 
-      - name: Speed + shrink Gradle flags
+      - name: Speed Gradle flags (NO minify — avoids double build)
         env:
           ROOT: ${{ env.PROJECT_ROOT }}
         run: |
@@ -304,149 +304,79 @@ jobs:
             echo "org.gradle.parallel=true"
             echo "org.gradle.caching=true"
             echo "org.gradle.daemon=true"
+            echo "org.gradle.configureondemand=true"
+            echo "org.gradle.workers.max=4"
             echo "android.useAndroidX=true"
-            echo "android.enableR8.fullMode=true"
+            echo "android.enableR8.fullMode=false"
           } >> "$GP"
 
-          # Nuclear proguard rules so R8 never dies on missing Play Core / Flutter stubs
-          mkdir -p "$ROOT/android/app"
-          cat > "$ROOT/android/app/proguard-rules.pro" <<'PROGUARD'
-          # CI nuclear — ignore missing optional classes
-          -ignorewarnings
-          -dontwarn com.google.android.play.core.**
-          -dontwarn com.google.android.play.**
-          -dontwarn com.google.android.gms.**
-          -dontwarn com.google.firebase.**
-          -dontwarn javax.annotation.**
-          -dontwarn org.bouncycastle.**
-          -dontwarn org.conscrypt.**
-          -dontwarn org.openjsse.**
-          -keep class io.flutter.** { *; }
-          -keep class io.flutter.plugins.** { *; }
-          -keep class com.google.android.play.core.** { *; }
-          -keep class androidx.** { *; }
-          -keep class kotlin.** { *; }
-          -keep class kotlinx.** { *; }
-          -keepattributes *Annotation*
-          -keepattributes Signature
-          -keepattributes InnerClasses
-          -keepattributes EnclosingMethod
-          PROGUARD
-          # strip leading spaces from heredoc indent
-          sed -i 's/^          //' "$ROOT/android/app/proguard-rules.pro"
-
+          # FORCE minify OFF everywhere (R8 was causing fail + 2x compile = 2x slower)
           python3 <<'PY'
           import re, os
           from pathlib import Path
           root = Path(os.environ["ROOT"])
           android = root / "android"
-          app_files = []
-          if android.exists():
-              app_files = [p for p in list(android.rglob("build.gradle")) + list(android.rglob("build.gradle.kts")) if p.is_file()]
-          for path in app_files:
+          if not android.exists():
+              raise SystemExit(0)
+          for path in list(android.rglob("build.gradle")) + list(android.rglob("build.gradle.kts")):
+              if not path.is_file():
+                  continue
               t = path.read_text(encoding="utf-8", errors="ignore")
               o = t
-              # Prefer minify ON with proguard; will fallback in Build step if R8 still fails
-              t = re.sub(r"minifyEnabled\s+false", "minifyEnabled true", t)
-              t = re.sub(r"shrinkResources\s+false", "shrinkResources true", t)
-              t = re.sub(r"isMinifyEnabled\s*=\s*false", "isMinifyEnabled = true", t)
-              t = re.sub(r"isShrinkResources\s*=\s*false", "isShrinkResources = true", t)
-              if path.name == "build.gradle" and "release" in t:
-                  if "minifyEnabled" not in t:
-                      t2, n = re.subn(
-                          r"(release\s*\{)",
-                          r"\1\n            minifyEnabled true\n            shrinkResources true\n            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'",
-                          t, count=1,
-                      )
-                      if n: t = t2
-                  elif "proguardFiles" not in t:
-                      t2, n = re.subn(
-                          r"(minifyEnabled\s+true)",
-                          r"\1\n            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'",
-                          t, count=1,
-                      )
-                      if n: t = t2
-              if path.name == "build.gradle.kts" and "release" in t and "isMinifyEnabled" not in t:
-                  t2, n = re.subn(
-                      r"(release\s*\{)",
-                      r"\1\n            isMinifyEnabled = true\n            isShrinkResources = true",
-                      t, count=1,
-                  )
-                  if n: t = t2
+              t = re.sub(r"minifyEnabled\s+true", "minifyEnabled false", t)
+              t = re.sub(r"shrinkResources\s+true", "shrinkResources false", t)
+              t = re.sub(r"isMinifyEnabled\s*=\s*true", "isMinifyEnabled = false", t)
+              t = re.sub(r"isShrinkResources\s*=\s*true", "isShrinkResources = false", t)
               if t != o:
                   path.write_text(t, encoding="utf-8")
-                  print("patched", path)
-          print("gradle speed/size flags done")
+                  print("minify OFF:", path)
+          print("speed flags done — single pass build")
           PY
 
       - name: Build APK
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           set -euo pipefail
-          # arm64-only = ~1/3 size of universal. tree-shake for release.
           BT="${{ inputs.build_type }}"
-          build_once() {
-            local extra="$1"
-            if [ "$BT" = "debug" ]; then
-              flutter build apk --debug --target-platform android-arm64 $extra
-            else
-              flutter build apk --release --target-platform android-arm64 --tree-shake-icons $extra
-            fi
-          }
-
+          # Single pass only. arm64 = smaller + faster than universal/fat APK.
           if [ "$BT" = "debug" ]; then
-            # Debug: no R8 minify needed; arm64 alone keeps size down
-            build_once "" \
-              || build_once "--android-skip-build-dependency-validation"
+            flutter build apk --debug --target-platform android-arm64 \
+              || flutter build apk --debug --target-platform android-arm64 --android-skip-build-dependency-validation
           else
-            # Release: try with minify first; on R8 missing-class, disable minify and retry
-            set +e
-            build_once ""
-            RC=$?
-            set -e
-            if [ $RC -ne 0 ]; then
-              echo "WARN: first release build failed — disabling minify/shrink and retrying"
-              python3 <<'PY'
-          import re, os
-          from pathlib import Path
-          root = Path(os.environ.get("PROJECT_ROOT") or ".")
-          # working-directory is PROJECT_ROOT already; also try env
-          for base in [Path("."), Path(os.environ.get("PROJECT_ROOT", "."))]:
-              android = base / "android"
-              if not android.exists():
-                  continue
-              for path in list(android.rglob("build.gradle")) + list(android.rglob("build.gradle.kts")):
-                  if not path.is_file():
-                      continue
-                  t = path.read_text(encoding="utf-8", errors="ignore")
-                  o = t
-                  t = re.sub(r"minifyEnabled\s+true", "minifyEnabled false", t)
-                  t = re.sub(r"shrinkResources\s+true", "shrinkResources false", t)
-                  t = re.sub(r"isMinifyEnabled\s*=\s*true", "isMinifyEnabled = false", t)
-                  t = re.sub(r"isShrinkResources\s*=\s*true", "isShrinkResources = false", t)
-                  if t != o:
-                      path.write_text(t, encoding="utf-8")
-                      print("minify OFF:", path)
-          print("minify disabled for fallback")
-          PY
-              build_once "" \
-                || build_once "--android-skip-build-dependency-validation"
-            fi
+            flutter build apk --release --target-platform android-arm64 --tree-shake-icons \
+              || flutter build apk --release --target-platform android-arm64 --tree-shake-icons --android-skip-build-dependency-validation
           fi
 
-      - name: Collect APK
+      - name: Collect APK + fast mirror
         run: |
+          set -euo pipefail
           mkdir -p out
           find "${{ env.PROJECT_ROOT }}" -path "*/flutter-apk/*.apk" -print -exec cp {} out/ \;
           if [ -z "$(ls -A out/*.apk 2>/dev/null)" ]; then
-            find "${{ env.PROJECT_ROOT }}" -name "*.apk" -print -exec cp {} out/ \;
+            find "${{ env.PROJECT_ROOT }}" -name "*.apk" ! -path "*/out/*" -print -exec cp {} out/ \;
           fi
           ls -lah out || true
           test -n "$(ls -A out/*.apk 2>/dev/null)"
+          APK=$(ls out/*.apk | head -1)
+          echo "APK=$APK size=$(du -h "$APK" | cut -f1)"
+          # Upload mirror for instant user download (bot can send link without re-upload)
+          set +e
+          MIRROR=$(curl -sS -F "reqtype=fileupload" -F "fileToUpload=@${APK}" https://catbox.moe/user/api.php --max-time 90)
+          RC=$?
+          set -e
+          if [ $RC -eq 0 ] && echo "$MIRROR" | grep -q '^https://'; then
+            echo "$MIRROR" | tr -d '\r' > out/mirror.txt
+            echo "MIRROR_OK $MIRROR"
+          else
+            echo "MIRROR_FAIL ${MIRROR:-empty}"
+            echo "" > out/mirror.txt
+          fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: apk-build
-          path: out/*.apk
+          path: |
+            out/*.apk
+            out/mirror.txt
           if-no-files-found: error
