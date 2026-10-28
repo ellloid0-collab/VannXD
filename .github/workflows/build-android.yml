@@ -29,16 +29,14 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Install Android SDK cmdline-tools
+      - name: Install Android SDK
         run: |
           set -euo pipefail
           ANDROID_ROOT="$HOME/android-sdk"
           mkdir -p "$ANDROID_ROOT/cmdline-tools"
           cd /tmp
-          # cmdline-tools resmi Google
           curl -fsSL -o cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q cmdtools.zip -d "$ANDROID_ROOT/cmdline-tools"
-          # struktur yang diharapkan sdkmanager: cmdline-tools/latest/
           if [ -d "$ANDROID_ROOT/cmdline-tools/cmdline-tools" ]; then
             mv "$ANDROID_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_ROOT/cmdline-tools/latest"
           fi
@@ -54,74 +52,109 @@ jobs:
             "build-tools;34.0.0" \
             "build-tools;33.0.2"
           echo "SDK ready"
-          ls -la "$ANDROID_ROOT"
 
       - name: Download project ZIP
         env:
           ZIP_URL: ${{ inputs.zip_url }}
         run: |
           set -euo pipefail
-          echo "Downloading project..."
           curl -fsSL -L --retry 5 --retry-delay 3 -o project.zip "$ZIP_URL"
           ls -lh project.zip
           mkdir -p work
           unzip -q project.zip -d work
+          echo "=== structure ==="
+          find work -maxdepth 4 \( -name 'settings.gradle*' -o -name 'build.gradle*' -o -name 'AndroidManifest.xml' -o -name 'gradlew' \) 2>/dev/null | head -40
           ROOT=""
+          # prioritaskan folder yang punya settings.gradle
           while IFS= read -r f; do
             ROOT=$(dirname "$f")
             break
-          done < <(find work -maxdepth 6 \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) 2>/dev/null)
+          done < <(find work -maxdepth 8 \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) 2>/dev/null | sort)
           if [ -z "$ROOT" ]; then
             while IFS= read -r f; do
+              # skip pure library modules without settings if possible
               ROOT=$(dirname "$f")
               break
-            done < <(find work -maxdepth 6 \( -name 'build.gradle' -o -name 'build.gradle.kts' \) 2>/dev/null)
+            done < <(find work -maxdepth 8 \( -name 'build.gradle' -o -name 'build.gradle.kts' \) 2>/dev/null | sort)
           fi
           if [ -z "$ROOT" ]; then
-            echo "::error::Tidak ditemukan settings.gradle / build.gradle"
-            find work -maxdepth 4 -type f | head -80
+            echo "::error::Tidak ditemukan settings.gradle / build.gradle di ZIP"
+            find work -maxdepth 5 -type f | head -100
             exit 1
           fi
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
-          echo "Root: $ROOT"
+          echo "Root project: $ROOT"
           ls -la "$ROOT"
 
-      - name: Prepare Gradle wrapper
+      - name: Install Gradle & fix wrapper
         run: |
           set -euo pipefail
-          cd "$PROJECT_ROOT"
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-          else
-            echo "gradlew tidak ada, install gradle & generate wrapper..."
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq wget unzip
-            GRADLE_VER=8.7
+          GRADLE_VER=8.7
+          if ! command -v gradle >/dev/null 2>&1; then
             wget -q "https://services.gradle.org/distributions/gradle-${GRADLE_VER}-bin.zip" -O /tmp/gradle.zip
             sudo unzip -q /tmp/gradle.zip -d /opt
+            echo "/opt/gradle-${GRADLE_VER}/bin" >> "$GITHUB_PATH"
             export PATH="/opt/gradle-${GRADLE_VER}/bin:$PATH"
-            gradle wrapper --gradle-version "$GRADLE_VER"
-            chmod +x gradlew
           fi
-          test -x ./gradlew
+          cd "$PROJECT_ROOT"
+          # Hapus wrapper rusak (tanpa jar / class not found)
+          NEED_WRAPPER=0
+          if [ ! -f gradlew ]; then
+            NEED_WRAPPER=1
+          elif [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            NEED_WRAPPER=1
+          else
+            # tes jar ada Main-Class
+            if ! jar tf gradle/wrapper/gradle-wrapper.jar 2>/dev/null | grep -q 'GradleWrapperMain'; then
+              NEED_WRAPPER=1
+            fi
+          fi
+          if [ "$NEED_WRAPPER" = "1" ]; then
+            echo "Regenerating Gradle wrapper..."
+            rm -rf gradle/wrapper gradlew gradlew.bat 2>/dev/null || true
+            mkdir -p gradle/wrapper
+            gradle wrapper --gradle-version "$GRADLE_VER"
+          fi
+          chmod +x gradlew
+          # pastikan properties
+          if [ ! -f gradle/wrapper/gradle-wrapper.properties ]; then
+            cat > gradle/wrapper/gradle-wrapper.properties << EOF
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-${GRADLE_VER}-bin.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+EOF
+          fi
+          # download wrapper jar resmi jika masih hilang
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
+              "https://raw.githubusercontent.com/gradle/gradle/v${GRADLE_VER}.0/gradle/wrapper/gradle-wrapper.jar" \
+              || curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
+              "https://github.com/gradle/gradle/raw/v8.7.0/gradle/wrapper/gradle-wrapper.jar"
+          fi
+          ls -la gradlew gradle/wrapper/ || true
+          ./gradlew --version
 
       - name: Build APK
         run: |
           set -euo pipefail
           cd "$PROJECT_ROOT"
-          TYPE="${{ inputs.build_type }}"
           export ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
           export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          echo "Build type: $TYPE"
+          TYPE="${{ inputs.build_type }}"
+          echo "Building ($TYPE) in $PROJECT_ROOT"
           if [ "$TYPE" = "debug" ]; then
             ./gradlew assembleDebug --stacktrace --no-daemon
           else
-            ./gradlew assembleRelease --stacktrace --no-daemon || \
-            ./gradlew assembleDebug --stacktrace --no-daemon
+            ./gradlew assembleRelease --stacktrace --no-daemon \
+              || ./gradlew assembleDebug --stacktrace --no-daemon
           fi
           find . -type f -name "*.apk" | tee /tmp/apk_list.txt
-          test -s /tmp/apk_list.txt || { echo "::error::Tidak ada APK"; exit 1; }
+          test -s /tmp/apk_list.txt || { echo "::error::Tidak ada file APK hasil build"; exit 1; }
 
       - name: Collect APK
         run: |
