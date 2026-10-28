@@ -1,22 +1,21 @@
-# Vann-XD — Android Native (Java/Kotlin) build
 name: Build Android Native
 
 on:
   workflow_dispatch:
     inputs:
       zip_url:
-        description: "URL ZIP project Android"
+        description: URL ZIP project Android
         required: true
         type: string
       tag:
-        description: "Build tag"
+        description: Build tag
         required: true
         type: string
       build_type:
-        description: "debug | release"
+        description: debug or release
         required: true
         type: string
-        default: "release"
+        default: release
 
 jobs:
   build:
@@ -26,7 +25,7 @@ jobs:
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: "temurin"
+          distribution: temurin
           java-version: "17"
 
       - name: Install Android SDK
@@ -45,13 +44,8 @@ jobs:
           echo "$ANDROID_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$ANDROID_ROOT/platform-tools" >> "$GITHUB_PATH"
           yes | "$ANDROID_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_ROOT" --licenses >/tmp/licenses.txt 2>&1 || true
-          "$ANDROID_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_ROOT" \
-            "platform-tools" \
-            "platforms;android-34" \
-            "platforms;android-33" \
-            "build-tools;34.0.0" \
-            "build-tools;33.0.2"
-          echo "SDK ready"
+          "$ANDROID_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_ROOT" "platform-tools" "platforms;android-34" "platforms;android-33" "build-tools;34.0.0" "build-tools;33.0.2"
+          echo SDK_ready
 
       - name: Download project ZIP
         env:
@@ -62,31 +56,22 @@ jobs:
           ls -lh project.zip
           mkdir -p work
           unzip -q project.zip -d work
-          echo "=== structure ==="
-          find work -maxdepth 4 \( -name 'settings.gradle*' -o -name 'build.gradle*' -o -name 'AndroidManifest.xml' -o -name 'gradlew' \) 2>/dev/null | head -40
+          find work -maxdepth 5 \( -name 'settings.gradle*' -o -name 'build.gradle*' -o -name 'gradlew' \) 2>/dev/null | head -40
           ROOT=""
-          # prioritaskan folder yang punya settings.gradle
-          while IFS= read -r f; do
-            ROOT=$(dirname "$f")
-            break
-          done < <(find work -maxdepth 8 \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) 2>/dev/null | sort)
+          while IFS= read -r f; do ROOT=$(dirname "$f"); break; done < <(find work -maxdepth 8 \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) 2>/dev/null | sort)
           if [ -z "$ROOT" ]; then
-            while IFS= read -r f; do
-              # skip pure library modules without settings if possible
-              ROOT=$(dirname "$f")
-              break
-            done < <(find work -maxdepth 8 \( -name 'build.gradle' -o -name 'build.gradle.kts' \) 2>/dev/null | sort)
+            while IFS= read -r f; do ROOT=$(dirname "$f"); break; done < <(find work -maxdepth 8 \( -name 'build.gradle' -o -name 'build.gradle.kts' \) 2>/dev/null | sort)
           fi
           if [ -z "$ROOT" ]; then
-            echo "::error::Tidak ditemukan settings.gradle / build.gradle di ZIP"
+            echo "::error::Tidak ditemukan settings.gradle / build.gradle"
             find work -maxdepth 5 -type f | head -100
             exit 1
           fi
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
-          echo "Root project: $ROOT"
+          echo "Root=$ROOT"
           ls -la "$ROOT"
 
-      - name: Install Gradle & fix wrapper
+      - name: Install Gradle and fix wrapper
         run: |
           set -euo pipefail
           GRADLE_VER=8.7
@@ -97,43 +82,31 @@ jobs:
             export PATH="/opt/gradle-${GRADLE_VER}/bin:$PATH"
           fi
           cd "$PROJECT_ROOT"
-          # Hapus wrapper rusak (tanpa jar / class not found)
           NEED_WRAPPER=0
-          if [ ! -f gradlew ]; then
-            NEED_WRAPPER=1
-          elif [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            NEED_WRAPPER=1
-          else
-            # tes jar ada Main-Class
-            if ! jar tf gradle/wrapper/gradle-wrapper.jar 2>/dev/null | grep -q 'GradleWrapperMain'; then
-              NEED_WRAPPER=1
-            fi
+          if [ ! -f gradlew ]; then NEED_WRAPPER=1; fi
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then NEED_WRAPPER=1; fi
+          if [ -f gradle/wrapper/gradle-wrapper.jar ]; then
+            if ! jar tf gradle/wrapper/gradle-wrapper.jar 2>/dev/null | grep -q GradleWrapperMain; then NEED_WRAPPER=1; fi
           fi
           if [ "$NEED_WRAPPER" = "1" ]; then
-            echo "Regenerating Gradle wrapper..."
+            echo Regenerating_wrapper
             rm -rf gradle/wrapper gradlew gradlew.bat 2>/dev/null || true
             mkdir -p gradle/wrapper
             gradle wrapper --gradle-version "$GRADLE_VER"
           fi
-          chmod +x gradlew
-          # pastikan properties
+          chmod +x gradlew || true
           if [ ! -f gradle/wrapper/gradle-wrapper.properties ]; then
-            cat > gradle/wrapper/gradle-wrapper.properties << EOF
-distributionBase=GRADLE_USER_HOME
-distributionPath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-${GRADLE_VER}-bin.zip
-networkTimeout=10000
-validateDistributionUrl=true
-zipStoreBase=GRADLE_USER_HOME
-zipStorePath=wrapper/dists
-EOF
+            printf '%s\n' \
+              'distributionBase=GRADLE_USER_HOME' \
+              'distributionPath=wrapper/dists' \
+              "distributionUrl=https\\://services.gradle.org/distributions/gradle-${GRADLE_VER}-bin.zip" \
+              'networkTimeout=10000' \
+              'zipStoreBase=GRADLE_USER_HOME' \
+              'zipStorePath=wrapper/dists' \
+              > gradle/wrapper/gradle-wrapper.properties
           fi
-          # download wrapper jar resmi jika masih hilang
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
-              "https://raw.githubusercontent.com/gradle/gradle/v${GRADLE_VER}.0/gradle/wrapper/gradle-wrapper.jar" \
-              || curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
-              "https://github.com/gradle/gradle/raw/v8.7.0/gradle/wrapper/gradle-wrapper.jar"
+            curl -fsSL -o gradle/wrapper/gradle-wrapper.jar "https://github.com/gradle/gradle/raw/v8.7.0/gradle/wrapper/gradle-wrapper.jar"
           fi
           ls -la gradlew gradle/wrapper/ || true
           ./gradlew --version
@@ -146,27 +119,22 @@ EOF
           export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           TYPE="${{ inputs.build_type }}"
-          echo "Building ($TYPE) in $PROJECT_ROOT"
+          echo "Building type=$TYPE root=$PROJECT_ROOT"
           if [ "$TYPE" = "debug" ]; then
             ./gradlew assembleDebug --stacktrace --no-daemon
           else
-            ./gradlew assembleRelease --stacktrace --no-daemon \
-              || ./gradlew assembleDebug --stacktrace --no-daemon
+            ./gradlew assembleRelease --stacktrace --no-daemon || ./gradlew assembleDebug --stacktrace --no-daemon
           fi
           find . -type f -name "*.apk" | tee /tmp/apk_list.txt
-          test -s /tmp/apk_list.txt || { echo "::error::Tidak ada file APK hasil build"; exit 1; }
+          test -s /tmp/apk_list.txt || { echo "::error::Tidak ada APK"; exit 1; }
 
       - name: Collect APK
         run: |
           set -euo pipefail
           mkdir -p dist
           APK=$(find "$PROJECT_ROOT" -type f -path "*/outputs/apk/release/*.apk" 2>/dev/null | head -1 || true)
-          if [ -z "$APK" ]; then
-            APK=$(find "$PROJECT_ROOT" -type f -path "*/outputs/apk/debug/*.apk" 2>/dev/null | head -1 || true)
-          fi
-          if [ -z "$APK" ]; then
-            APK=$(find "$PROJECT_ROOT" -type f -name "*.apk" 2>/dev/null | head -1 || true)
-          fi
+          if [ -z "$APK" ]; then APK=$(find "$PROJECT_ROOT" -type f -path "*/outputs/apk/debug/*.apk" 2>/dev/null | head -1 || true); fi
+          if [ -z "$APK" ]; then APK=$(find "$PROJECT_ROOT" -type f -name "*.apk" 2>/dev/null | head -1 || true); fi
           test -n "$APK" || { echo "::error::APK tidak ditemukan"; exit 1; }
           cp "$APK" dist/app.apk
           ls -lh dist/app.apk
