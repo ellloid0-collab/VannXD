@@ -1,0 +1,124 @@
+# Vann-XD — Android Native (Java/Kotlin) build
+# Letakkan file ini di repo GitHub build kamu:
+#   .github/workflows/build-android.yml
+#
+# Input sama dengan build.yml Flutter: zip_url, tag, build_type
+
+name: Build Android Native
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: "URL ZIP project Android"
+        required: true
+        type: string
+      tag:
+        description: "Build tag"
+        required: true
+        type: string
+      build_type:
+        description: "debug | release"
+        required: true
+        type: string
+        default: "release"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Download project ZIP
+        env:
+          ZIP_URL: ${{ inputs.zip_url }}
+        run: |
+          set -euo pipefail
+          echo "Downloading: $ZIP_URL"
+          curl -fsSL -L --retry 3 -o project.zip "$ZIP_URL"
+          ls -lh project.zip
+          mkdir -p work
+          unzip -q project.zip -d work
+          # Cari root project (settings.gradle / build.gradle)
+          ROOT=""
+          for f in $(find work -maxdepth 5 \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) | head -20); do
+            ROOT=$(dirname "$f")
+            break
+          done
+          if [ -z "$ROOT" ]; then
+            for f in $(find work -maxdepth 5 \( -name 'build.gradle' -o -name 'build.gradle.kts' \) | head -20); do
+              ROOT=$(dirname "$f")
+              break
+            done
+          fi
+          if [ -z "$ROOT" ]; then
+            echo "::error::Tidak ditemukan settings.gradle / build.gradle di ZIP"
+            find work -maxdepth 4 -type f | head -50
+            exit 1
+          fi
+          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "Root project: $ROOT"
+          ls -la "$ROOT"
+
+      - name: Make gradlew executable
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_ROOT"
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+          else
+            echo "gradlew tidak ada — generate wrapper dengan gradle system..."
+            gradle wrapper --gradle-version 8.7 || true
+            chmod +x gradlew 2>/dev/null || true
+          fi
+          test -x gradlew || { echo "::error::gradlew tidak tersedia"; exit 1; }
+
+      - name: Build APK
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_ROOT"
+          TYPE="${{ inputs.build_type }}"
+          echo "Build type: $TYPE"
+          if [ "$TYPE" = "debug" ]; then
+            ./gradlew assembleDebug --stacktrace --no-daemon
+          else
+            # Release unsigned / local (banyak base tanpa keystore)
+            ./gradlew assembleRelease --stacktrace --no-daemon \
+              -Pandroid.injected.signing.store.file= \
+              || ./gradlew assembleDebug --stacktrace --no-daemon
+          fi
+          echo "Mencari APK..."
+          find . -type f -name "*.apk" | tee /tmp/apk_list.txt
+          test -s /tmp/apk_list.txt || { echo "::error::Tidak ada file APK hasil build"; exit 1; }
+
+      - name: Collect APK
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # prioritaskan release lalu debug
+          APK=$(find "$PROJECT_ROOT" -type f -path "*/outputs/apk/release/*.apk" | head -1 || true)
+          if [ -z "$APK" ]; then
+            APK=$(find "$PROJECT_ROOT" -type f -path "*/outputs/apk/debug/*.apk" | head -1 || true)
+          fi
+          if [ -z "$APK" ]; then
+            APK=$(find "$PROJECT_ROOT" -type f -name "*.apk" | head -1 || true)
+          fi
+          test -n "$APK" || { echo "::error::APK tidak ditemukan"; exit 1; }
+          cp "$APK" dist/app.apk
+          ls -lh dist/app.apk
+          echo "TAG=${{ inputs.tag }}" > dist/meta.txt
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-apk
+          path: dist/
+          if-no-files-found: error
