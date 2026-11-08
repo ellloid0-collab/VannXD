@@ -22,9 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -32,26 +29,27 @@ jobs:
           cache: true
 
       - name: Create WebView app
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+          WEB_URL: ${{ inputs.web_url }}
         run: |
-          set -e
-          APP_NAME='${{ inputs.app_name }}'
-          WEB_URL='${{ inputs.web_url }}'
-          # sanitize package-ish name
+          set -euo pipefail
           SAFE=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
           if [ -z "$SAFE" ]; then SAFE=webapp; fi
-          flutter create --org com.vannxd --project-name "$SAFE" app
+          flutter create --org com.patlapan --project-name "$SAFE" app
           cd app
-          # minimal WebView main.dart
-          cat > lib/main.dart <<'DART'
-import 'package:flutter/material.dart';
+          python3 - <<'PY'
+          import os, pathlib
+          web = os.environ.get("WEB_URL", "https://example.com").replace("'", "\\'")
+          dart = f'''import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 void main() => runApp(const MyApp());
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class MyApp extends StatelessWidget {{
+  const MyApp({{super.key}});
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) {{
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
@@ -59,43 +57,55 @@ class MyApp extends StatelessWidget {
           child: WebViewWidget(
             controller: WebViewController()
               ..setJavaScriptMode(JavaScriptMode.unrestricted)
-              ..loadRequest(Uri.parse(const String.fromEnvironment('WEB_URL', defaultValue: 'https://example.com'))),
+              ..loadRequest(Uri.parse('{web}')),
           ),
         ),
       ),
     );
-  }
-}
-DART
-          # inject URL via dart-define later; also patch pubspec for webview
+  }}
+}}
+'''
+          pathlib.Path("lib/main.dart").write_text(dart)
+          print("main.dart written", web)
+          PY
           if ! grep -q webview_flutter pubspec.yaml; then
-            echo "  webview_flutter: ^4.7.0" >> pubspec.yaml
+            printf '\n  webview_flutter: ^4.7.0\n' >> pubspec.yaml
           fi
           flutter pub get
 
       - name: Optional icon
+        env:
+          ICON: ${{ inputs.icon_url }}
         run: |
-          set -e
-          ICON='${{ inputs.icon_url }}'
+          set -euo pipefail
+          cd app
           if [ -n "$ICON" ]; then
-            mkdir -p app/assets
-            curl -fsSL "$ICON" -o app/assets/icon.png || true
+            curl -fsSL -L -o /tmp/icon.png "$ICON" || true
+            if [ -f /tmp/icon.png ]; then
+              mkdir -p assets
+              cp /tmp/icon.png assets/icon.png || true
+            fi
           fi
+          echo "icon step done"
 
-      - name: Build release APK
-        working-directory: app
-        run: flutter build apk --release --dart-define=WEB_URL=${{ inputs.web_url }}
+      - name: Build APK
+        run: |
+          set -euo pipefail
+          cd app
+          flutter build apk --release
+          ls -lh build/app/outputs/flutter-apk/ || true
+          test -f build/app/outputs/flutter-apk/app-release.apk
 
       - name: Collect APK
         run: |
-          mkdir -p out
-          find app -path "*/flutter-apk/*.apk" -exec cp {} out/ \;
-          ls -lah out
-          test -n "$(ls -A out/*.apk 2>/dev/null)"
+          set -euo pipefail
+          mkdir -p dist
+          cp app/build/app/outputs/flutter-apk/app-release.apk dist/app.apk
+          ls -lh dist/app.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: apk-build
-          path: out/*.apk
+          name: app-apk
+          path: dist/
           if-no-files-found: error
