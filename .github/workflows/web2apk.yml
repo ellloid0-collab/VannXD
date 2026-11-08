@@ -38,36 +38,7 @@ jobs:
           if [ -z "$SAFE" ]; then SAFE=webapp; fi
           flutter create --org com.patlapan --project-name "$SAFE" app
           cd app
-          python3 - <<'PY'
-          import os, pathlib
-          web = os.environ.get("WEB_URL", "https://example.com").replace("'", "\\'")
-          dart = f'''import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-
-void main() => runApp(const MyApp());
-
-class MyApp extends StatelessWidget {{
-  const MyApp({{super.key}});
-  @override
-  Widget build(BuildContext context) {{
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: Scaffold(
-        body: SafeArea(
-          child: WebViewWidget(
-            controller: WebViewController()
-              ..setJavaScriptMode(JavaScriptMode.unrestricted)
-              ..loadRequest(Uri.parse('{web}')),
-          ),
-        ),
-      ),
-    );
-  }}
-}}
-'''
-          pathlib.Path("lib/main.dart").write_text(dart)
-          print("main.dart written", web)
-          PY
+          echo aW1wb3J0ICdwYWNrYWdlOmZsdXR0ZXIvbWF0ZXJpYWwuZGFydCc7CmltcG9ydCAncGFja2FnZTp3ZWJ2aWV3X2ZsdXR0ZXIvd2Vidmlld19mbHV0dGVyLmRhcnQnOwoKdm9pZCBtYWluKCkgPT4gcnVuQXBwKGNvbnN0IE15QXBwKCkpOwoKY2xhc3MgTXlBcHAgZXh0ZW5kcyBTdGF0ZWxlc3NXaWRnZXQgewogIGNvbnN0IE15QXBwKHtzdXBlci5rZXl9KTsKICBAb3ZlcnJpZGUKICBXaWRnZXQgYnVpbGQoQnVpbGRDb250ZXh0IGNvbnRleHQpIHsKICAgIGNvbnN0IHVybCA9IFN0cmluZy5mcm9tRW52aXJvbm1lbnQoJ1dFQl9VUkwnLCBkZWZhdWx0VmFsdWU6ICdodHRwczovL2V4YW1wbGUuY29tJyk7CiAgICByZXR1cm4gTWF0ZXJpYWxBcHAoCiAgICAgIGRlYnVnU2hvd0NoZWNrZWRNb2RlQmFubmVyOiBmYWxzZSwKICAgICAgaG9tZTogU2NhZmZvbGQoCiAgICAgICAgYm9keTogU2FmZUFyZWEoCiAgICAgICAgICBjaGlsZDogV2ViVmlld1dpZGdldCgKICAgICAgICAgICAgY29udHJvbGxlcjogV2ViVmlld0NvbnRyb2xsZXIoKQogICAgICAgICAgICAgIC4uc2V0SmF2YVNjcmlwdE1vZGUoSmF2YVNjcmlwdE1vZGUudW5yZXN0cmljdGVkKQogICAgICAgICAgICAgIC4ubG9hZFJlcXVlc3QoVXJpLnBhcnNlKHVybCkpLAogICAgICAgICAgKSwKICAgICAgICApLAogICAgICApLAogICAgKTsKICB9Cn0K | base64 -d > lib/main.dart
           if ! grep -q webview_flutter pubspec.yaml; then
             printf '\n  webview_flutter: ^4.7.0\n' >> pubspec.yaml
           fi
@@ -81,19 +52,16 @@ class MyApp extends StatelessWidget {{
           cd app
           if [ -n "$ICON" ]; then
             curl -fsSL -L -o /tmp/icon.png "$ICON" || true
-            if [ -f /tmp/icon.png ]; then
-              mkdir -p assets
-              cp /tmp/icon.png assets/icon.png || true
-            fi
           fi
-          echo "icon step done"
+          echo icon_ok
 
       - name: Build APK
+        env:
+          WEB_URL: ${{ inputs.web_url }}
         run: |
           set -euo pipefail
           cd app
-          flutter build apk --release
-          ls -lh build/app/outputs/flutter-apk/ || true
+          flutter build apk --release --dart-define=WEB_URL="$WEB_URL"
           test -f build/app/outputs/flutter-apk/app-release.apk
 
       - name: Collect APK
