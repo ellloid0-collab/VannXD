@@ -38,10 +38,26 @@ jobs:
           if [ -z "$SAFE" ]; then SAFE=webapp; fi
           flutter create --org com.patlapan --project-name "$SAFE" app
           cd app
+
+          # main.dart (WebView) via base64
           echo aW1wb3J0ICdwYWNrYWdlOmZsdXR0ZXIvbWF0ZXJpYWwuZGFydCc7CmltcG9ydCAncGFja2FnZTp3ZWJ2aWV3X2ZsdXR0ZXIvd2Vidmlld19mbHV0dGVyLmRhcnQnOwoKdm9pZCBtYWluKCkgPT4gcnVuQXBwKGNvbnN0IE15QXBwKCkpOwoKY2xhc3MgTXlBcHAgZXh0ZW5kcyBTdGF0ZWxlc3NXaWRnZXQgewogIGNvbnN0IE15QXBwKHtzdXBlci5rZXl9KTsKICBAb3ZlcnJpZGUKICBXaWRnZXQgYnVpbGQoQnVpbGRDb250ZXh0IGNvbnRleHQpIHsKICAgIGNvbnN0IHVybCA9IFN0cmluZy5mcm9tRW52aXJvbm1lbnQoJ1dFQl9VUkwnLCBkZWZhdWx0VmFsdWU6ICdodHRwczovL2V4YW1wbGUuY29tJyk7CiAgICByZXR1cm4gTWF0ZXJpYWxBcHAoCiAgICAgIGRlYnVnU2hvd0NoZWNrZWRNb2RlQmFubmVyOiBmYWxzZSwKICAgICAgaG9tZTogU2NhZmZvbGQoCiAgICAgICAgYm9keTogU2FmZUFyZWEoCiAgICAgICAgICBjaGlsZDogV2ViVmlld1dpZGdldCgKICAgICAgICAgICAgY29udHJvbGxlcjogV2ViVmlld0NvbnRyb2xsZXIoKQogICAgICAgICAgICAgIC4uc2V0SmF2YVNjcmlwdE1vZGUoSmF2YVNjcmlwdE1vZGUudW5yZXN0cmljdGVkKQogICAgICAgICAgICAgIC4ubG9hZFJlcXVlc3QoVXJpLnBhcnNlKHVybCkpLAogICAgICAgICAgKSwKICAgICAgICApLAogICAgICApLAogICAgKTsKICB9Cn0K | base64 -d > lib/main.dart
-          if ! grep -q webview_flutter pubspec.yaml; then
-            printf '\n  webview_flutter: ^4.7.0\n' >> pubspec.yaml
+
+          # Tambah webview_flutter dengan benar (bukan append buta)
+          if ! grep -q 'webview_flutter:' pubspec.yaml; then
+            awk '
+              BEGIN{done=0}
+              /^dependencies:/ && !done {
+                print
+                print "  webview_flutter: ^4.7.0"
+                done=1
+                next
+              }
+              {print}
+            ' pubspec.yaml > pubspec.yaml.tmp && mv pubspec.yaml.tmp pubspec.yaml
           fi
+
+          echo "----- pubspec.yaml -----"
+          cat pubspec.yaml
           flutter pub get
 
       - name: Optional icon
