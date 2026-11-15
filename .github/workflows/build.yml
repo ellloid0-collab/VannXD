@@ -63,7 +63,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.27.4"
+          flutter-version: "3.24.5"
           channel: stable
           cache: true
 
@@ -180,10 +180,37 @@ jobs:
         run: |
           set -euo pipefail
           rm -f pubspec.lock
+          echo "=== pubspec.yaml (head) ==="
+          head -80 pubspec.yaml || true
+
+          # Longgarkan constraint yang sering bikin pub get gagal di base random
           if [ -f pubspec.yaml ]; then
             sed -i -E "s|font_awesome_flutter[[:space:]]*:[[:space:]]*.*|font_awesome_flutter: any|" pubspec.yaml || true
+            # sdk: ">=3.5.0 <4.0.0" -> longgar
+            sed -i -E 's/sdk:[[:space:]]*"[^"]*"/sdk: ">=3.0.0 <4.0.0"/' pubspec.yaml || true
+            sed -i -E "s/sdk:[[:space:]]*'[^']*'/sdk: '>=3.0.0 <4.0.0'/" pubspec.yaml || true
           fi
-          flutter pub get
+
+          set +e
+          flutter pub get -v 2>&1 | tee /tmp/pubget.log
+          RC=${PIPESTATUS[0]}
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            echo "=== pub get FAILED rc=$RC — retry once ==="
+            flutter clean || true
+            set +e
+            flutter pub get 2>&1 | tee -a /tmp/pubget.log
+            RC=${PIPESTATUS[0]}
+            set -e
+          fi
+          if [ "$RC" -ne 0 ]; then
+            echo "=== FULL pub get log (tail) ==="
+            tail -n 120 /tmp/pubget.log || true
+            echo "=== flutter --version ==="
+            flutter --version || true
+            exit $RC
+          fi
+          echo "pub get OK"
 
       - name: Nuclear FA stub
         run: |
