@@ -63,6 +63,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: "3.27.4"
           channel: stable
           cache: true
 
@@ -71,6 +72,11 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Flutter config
+        run: |
+          flutter config --no-analytics
+          flutter --version
 
       - name: Nuclear Android + AGP + Gradle patch
         run: |
@@ -83,16 +89,16 @@ jobs:
           PROP="$ROOT/android/gradle/wrapper/gradle-wrapper.properties"
           mkdir -p "$ROOT/android/gradle/wrapper"
           if [ -f "$PROP" ]; then
-            sed -i "s|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-all.zip|" "$PROP" || true
+            sed -i "s|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.11.1-all.zip|" "$PROP" || true
           fi
-          if [ ! -f "$PROP" ] || ! grep -q "gradle-8.14.3" "$PROP" 2>/dev/null; then
+          if [ ! -f "$PROP" ] || ! grep -q "gradle-8.11.1" "$PROP" 2>/dev/null; then
             echo "distributionBase=GRADLE_USER_HOME" > "$PROP"
             echo "distributionPath=wrapper/dists" >> "$PROP"
             echo "zipStoreBase=GRADLE_USER_HOME" >> "$PROP"
             echo "zipStorePath=wrapper/dists" >> "$PROP"
-            echo "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-all.zip" >> "$PROP"
+            echo "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.11.1-all.zip" >> "$PROP"
           fi
-          echo "Gradle wrapper forced to 8.14.3"
+          echo "Gradle wrapper forced to 8.11.1"
           cat "$PROP"
 
           # 2) Nuclear AGP + Kotlin patch on ALL gradle files + version catalogs
@@ -106,8 +112,8 @@ jobs:
               print("no android dir — skip")
               raise SystemExit(0)
 
-          TARGET_AGP = "8.9.2"
-          TARGET_KOTLIN = "2.1.0"
+          TARGET_AGP = "8.7.3"
+          TARGET_KOTLIN = "2.0.21"
 
           patterns = [
               # Classic classpath
@@ -157,17 +163,17 @@ jobs:
                   print("  still-has:", path.name, "→", m.group(0)[:80])
           PY
 
-          # 3) Force Kotlin >= 2.1.0 on every gradle file (Flutter min)
+          # 3) Force Kotlin >= 2.0.21 on every gradle file (Flutter min)
           find "$ROOT/android" -type f \( -name "*.gradle" -o -name "*.gradle.kts" -o -name "*.toml" \) 2>/dev/null | while read -r f; do
             # bump common version forms to 2.2.20
             sed -i -E \
-              -e 's/(org\.jetbrains\.kotlin\.[a-z."() ]*version[: =]*["'\''"]?)2\.[01]\.[0-9]+/\12.1.0/g' \
-              -e 's/(kotlin[_-]?[Vv]ersion\s*=\s*["'\''"]?)2\.[01]\.[0-9]+/\12.1.0/g' \
-              -e 's/(kotlin-gradle-plugin:)2\.[01]\.[0-9]+/\12.1.0/g' \
-              -e 's/(kotlin\s*=\s*["'\''"]?)2\.[01]\.[0-9]+/\12.1.0/g' \
+              -e 's/(org\.jetbrains\.kotlin\.[a-z."() ]*version[: =]*["'\''"]?)2\.[01]\.[0-9]+/\12.0.21/g' \
+              -e 's/(kotlin[_-]?[Vv]ersion\s*=\s*["'\''"]?)2\.[01]\.[0-9]+/\12.0.21/g' \
+              -e 's/(kotlin-gradle-plugin:)2\.[01]\.[0-9]+/\12.0.21/g' \
+              -e 's/(kotlin\s*=\s*["'\''"]?)2\.[01]\.[0-9]+/\12.0.21/g' \
               "$f" 2>/dev/null || true
           done
-          echo "Kotlin force-bump to 2.1.0 done"
+          echo "Kotlin force-bump to 2.0.21 done"
 
       - name: Flutter pub get
         working-directory: ${{ env.PROJECT_ROOT }}
