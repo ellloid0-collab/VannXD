@@ -86,13 +86,11 @@ jobs:
             sed -i "s|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-all.zip|" "$PROP" || true
           fi
           if [ ! -f "$PROP" ] || ! grep -q "gradle-8.14.3" "$PROP" 2>/dev/null; then
-            cat > "$PROP" << 'GPEOF'
-distributionBase=GRADLE_USER_HOME
-distributionPath=wrapper/dists
-zipStoreBase=GRADLE_USER_HOME
-zipStorePath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip
-GPEOF
+            echo "distributionBase=GRADLE_USER_HOME" > "$PROP"
+            echo "distributionPath=wrapper/dists" >> "$PROP"
+            echo "zipStoreBase=GRADLE_USER_HOME" >> "$PROP"
+            echo "zipStorePath=wrapper/dists" >> "$PROP"
+            echo "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-all.zip" >> "$PROP"
           fi
           echo "Gradle wrapper forced to 8.14.3"
           cat "$PROP"
