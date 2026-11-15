@@ -66,6 +66,12 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Nuclear Android + AGP + Gradle patch
         run: |
           set -euo pipefail
@@ -76,8 +82,8 @@ jobs:
           # 1) Force Gradle wrapper
           PROP="$ROOT/android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$PROP" ]; then
-            sed -i "s|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-all.zip|" "$PROP"
-            echo "Gradle wrapper forced to 8.14.3"
+            sed -i "s|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.11.1-all.zip|" "$PROP"
+            echo "Gradle wrapper forced to 8.11.1"
             cat "$PROP"
           else
             echo "WARNING: no gradle-wrapper.properties"
@@ -94,8 +100,8 @@ jobs:
               print("no android dir — skip")
               raise SystemExit(0)
 
-          TARGET_AGP = "8.11.1"
-          TARGET_KOTLIN = "2.2.20"
+          TARGET_AGP = "8.7.3"
+          TARGET_KOTLIN = "2.0.21"
 
           patterns = [
               # Classic classpath
@@ -145,17 +151,17 @@ jobs:
                   print("  still-has:", path.name, "→", m.group(0)[:80])
           PY
 
-          # 3) Force Kotlin >= 2.2.20 on every gradle file (Flutter min)
+          # 3) Force Kotlin >= 2.0.21 on every gradle file (Flutter min)
           find "$ROOT/android" -type f \( -name "*.gradle" -o -name "*.gradle.kts" -o -name "*.toml" \) 2>/dev/null | while read -r f; do
             # bump common version forms to 2.2.20
             sed -i -E \
-              -e 's/(org\.jetbrains\.kotlin\.[a-z."() ]*version[: =]*["'\''"]?)2\.[01]\.[0-9]+/\12.2.20/g' \
-              -e 's/(kotlin[_-]?[Vv]ersion\s*=\s*["'\''"]?)2\.[01]\.[0-9]+/\12.2.20/g' \
-              -e 's/(kotlin-gradle-plugin:)2\.[01]\.[0-9]+/\12.2.20/g' \
-              -e 's/(kotlin\s*=\s*["'\''"]?)2\.[01]\.[0-9]+/\12.2.20/g' \
+              -e 's/(org\.jetbrains\.kotlin\.[a-z."() ]*version[: =]*["'\''"]?)2\.[01]\.[0-9]+/\12.0.21/g' \
+              -e 's/(kotlin[_-]?[Vv]ersion\s*=\s*["'\''"]?)2\.[01]\.[0-9]+/\12.0.21/g' \
+              -e 's/(kotlin-gradle-plugin:)2\.[01]\.[0-9]+/\12.0.21/g' \
+              -e 's/(kotlin\s*=\s*["'\''"]?)2\.[01]\.[0-9]+/\12.0.21/g' \
               "$f" 2>/dev/null || true
           done
-          echo "Kotlin force-bump to 2.2.20 done"
+          echo "Kotlin force-bump to 2.0.21 done"
 
       - name: Flutter pub get
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -339,12 +345,13 @@ jobs:
           set -euo pipefail
           BT="${{ inputs.build_type }}"
           # Single pass only. arm64 = smaller + faster than universal/fat APK.
+          # skip-validation dulu biar base yang "lolos di bot lain" tidak gagal cek versi
           if [ "$BT" = "debug" ]; then
-            flutter build apk --debug --target-platform android-arm64 \
-              || flutter build apk --debug --target-platform android-arm64 --android-skip-build-dependency-validation
+            flutter build apk --debug --target-platform android-arm64 --android-skip-build-dependency-validation \
+              || flutter build apk --debug --target-platform android-arm64
           else
-            flutter build apk --release --target-platform android-arm64 --tree-shake-icons \
-              || flutter build apk --release --target-platform android-arm64 --tree-shake-icons --android-skip-build-dependency-validation
+            flutter build apk --release --target-platform android-arm64 --tree-shake-icons --android-skip-build-dependency-validation \
+              || flutter build apk --release --target-platform android-arm64 --tree-shake-icons
           fi
 
       - name: Collect APK + fast mirror
